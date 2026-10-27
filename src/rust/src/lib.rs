@@ -115,6 +115,7 @@ fn rust_freestile(
             None
         },
         coalesce: do_coalesce,
+        gzip_level: None,
     };
 
     match engine::generate_pmtiles(&layer_data, output_path, &config, reporter.as_ref()) {
@@ -718,6 +719,7 @@ fn rust_freestile_file(
                 None
             },
             coalesce: do_coalesce,
+            gzip_level: None,
         };
 
         match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {
@@ -831,6 +833,7 @@ fn rust_freestile_duckdb(
                 None
             },
             coalesce: do_coalesce,
+            gzip_level: None,
         };
 
         match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {
@@ -940,6 +943,7 @@ fn rust_freestile_duckdb_query(
                 None
             },
             coalesce: do_coalesce,
+            gzip_level: None,
         };
 
         let maybe_stream = match streaming_mode {

@@ -18,6 +18,11 @@ pub struct TileConfig {
     pub cluster_distance: Option<f64>,
     pub cluster_maxzoom: Option<u8>,
     pub coalesce: bool,
+    /// Gzip level (0-9) for tile data written by the in-memory pipeline.
+    /// `None` keeps the fast level 1. Tile contents do not change; a higher
+    /// level only shrinks the archive (about 14% at level 6 on HEC-RAS mesh
+    /// tiles) at some encode time.
+    pub gzip_level: Option<u32>,
 }
 
 /// Progress reporting trait for binding-specific output
@@ -364,8 +369,9 @@ pub fn generate_tiles(
                         return None;
                     }
 
-                    let compressed = pmtiles_writer::gzip_compress(&tile_bytes)
-                        .expect("gzip compression failed");
+                    let compressed =
+                        pmtiles_writer::gzip_compress_level(&tile_bytes, config.gzip_level)
+                            .expect("gzip compression failed");
                     Some((coord, compressed))
                 })
                 .collect();
@@ -401,6 +407,9 @@ pub fn generate_pmtiles(
     config: &TileConfig,
     reporter: &dyn ProgressReporter,
 ) -> Result<(), String> {
+    if config.gzip_level.map_or(false, |level| level > 9) {
+        return Err("gzip_level must be between 0 and 9".to_string());
+    }
     let bounds = compute_all_bounds(layers);
 
     // Build layer metadata for PMTiles

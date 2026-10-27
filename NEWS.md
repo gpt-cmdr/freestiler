@@ -1,5 +1,11 @@
 # freestiler 0.3.0.9000
 
+* New `gzip_level` option (Python `freestile(gzip_level=)`, Rust
+  `TileConfig::gzip_level`) sets the gzip level of tile data in the in-memory
+  pipeline. The default stays the fast level 1; tile contents never change. On
+  an 87,039-cell HEC-RAS mesh (z10-15) level 6 makes the archive 14% smaller
+  (13.8 to 11.9 MB) for about 10% more tiling time.
+
 * `freestile()` now accepts `category`, `category_values`, and
   `cluster_min_points` for a single POINT sf object or GeoDataFrame. Category
   counts use the same Supercluster engine as file clustering, with individual
