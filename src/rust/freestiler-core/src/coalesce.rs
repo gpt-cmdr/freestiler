@@ -61,6 +61,22 @@ fn property_hash(props: &[PropertyValue]) -> u64 {
     hasher.finish()
 }
 
+/// Group features by property hash, in order of first appearance, so the
+/// output (and the encoded tile bytes) does not depend on hash iteration order.
+fn group_by_properties(features: Vec<Feature>) -> Vec<(u64, Vec<Feature>)> {
+    let mut slots: HashMap<u64, usize> = HashMap::new();
+    let mut groups: Vec<(u64, Vec<Feature>)> = Vec::new();
+    for f in features {
+        let key = property_hash(&f.properties);
+        let slot = *slots.entry(key).or_insert_with(|| {
+            groups.push((key, Vec::new()));
+            groups.len() - 1
+        });
+        groups[slot].1.push(f);
+    }
+    groups
+}
+
 /// Merge line features that share properties and endpoints.
 /// Uses an endpoint adjacency graph to chain connected line segments.
 fn merge_lines(lines: Vec<Feature>) -> Vec<Feature> {
@@ -68,12 +84,7 @@ fn merge_lines(lines: Vec<Feature>) -> Vec<Feature> {
         return Vec::new();
     }
 
-    // Group by property hash
-    let mut groups: HashMap<u64, Vec<Feature>> = HashMap::new();
-    for f in lines {
-        let key = property_hash(&f.properties);
-        groups.entry(key).or_default().push(f);
-    }
+    let groups = group_by_properties(lines);
 
     let mut result = Vec::new();
     for (_, group) in groups {
@@ -234,12 +245,7 @@ fn group_polygons(polygons: Vec<Feature>) -> Vec<Feature> {
         return Vec::new();
     }
 
-    // Group by property hash
-    let mut groups: HashMap<u64, Vec<Feature>> = HashMap::new();
-    for f in polygons {
-        let key = property_hash(&f.properties);
-        groups.entry(key).or_default().push(f);
-    }
+    let groups = group_by_properties(polygons);
 
     let mut result = Vec::new();
     for (_, group) in groups {
