@@ -46,188 +46,343 @@ fn parse_layers_from_py(
     layers: &[Py<PyAny>],
     generate_ids: bool,
 ) -> PyResult<Vec<LayerData>> {
-    let mut result = Vec::new();
     let mut id_offset: u64 = 0;
+    layers
+        .iter()
+        .map(|layer| parse_layer_from_py(py, layer, generate_ids, &mut id_offset))
+        .collect()
+}
 
-    for (_layer_idx, layer_obj) in layers.iter().enumerate() {
-        let layer = layer_obj.bind(py);
+/// Parse one layer dict. With `generate_ids`, IDs continue from `offset`,
+/// which then advances by the number of parsed features.
+fn parse_layer_from_py(
+    py: Python<'_>,
+    layer_obj: &Py<PyAny>,
+    generate_ids: bool,
+    offset: &mut u64,
+) -> PyResult<LayerData> {
+    let id_offset = *offset;
+    let layer = layer_obj.bind(py);
 
-        // Extract fields from dict
-        let name: String = layer.get_item("name")?.extract()?;
-        let wkb_list: Vec<Vec<u8>> = layer.get_item("wkb")?.extract()?;
-        let _geom_types: Vec<String> = layer.get_item("geom_types")?.extract()?;
-        let prop_names: Vec<String> = layer.get_item("prop_names")?.extract()?;
-        let prop_types: Vec<String> = layer.get_item("prop_types")?.extract()?;
-        let string_columns: Vec<Vec<Option<String>>> =
-            layer.get_item("string_columns")?.extract()?;
-        let int_columns: Vec<Vec<Option<i64>>> = layer.get_item("int_columns")?.extract()?;
-        let float_columns: Vec<Vec<Option<f64>>> = layer.get_item("float_columns")?.extract()?;
-        let bool_columns: Vec<Vec<Option<bool>>> = layer.get_item("bool_columns")?.extract()?;
-        let layer_min_zoom: u8 = layer.get_item("min_zoom")?.extract()?;
-        let layer_max_zoom: u8 = layer.get_item("max_zoom")?.extract()?;
+    // Extract fields from dict
+    let name: String = layer.get_item("name")?.extract()?;
+    let wkb_list: Vec<Vec<u8>> = layer.get_item("wkb")?.extract()?;
+    let _geom_types: Vec<String> = layer.get_item("geom_types")?.extract()?;
+    let prop_names: Vec<String> = layer.get_item("prop_names")?.extract()?;
+    let prop_types: Vec<String> = layer.get_item("prop_types")?.extract()?;
+    let string_columns: Vec<Vec<Option<String>>> =
+        layer.get_item("string_columns")?.extract()?;
+    let int_columns: Vec<Vec<Option<i64>>> = layer.get_item("int_columns")?.extract()?;
+    let float_columns: Vec<Vec<Option<f64>>> = layer.get_item("float_columns")?.extract()?;
+    let bool_columns: Vec<Vec<Option<bool>>> = layer.get_item("bool_columns")?.extract()?;
+    let layer_min_zoom: u8 = layer.get_item("min_zoom")?.extract()?;
+    let layer_max_zoom: u8 = layer.get_item("max_zoom")?.extract()?;
 
-        let n_features = wkb_list.len();
+    let n_features = wkb_list.len();
 
-        // Build property column index mapping
-        let mut string_col_idx = 0usize;
-        let mut int_col_idx = 0usize;
-        let mut float_col_idx = 0usize;
-        let mut bool_col_idx = 0usize;
+    // Build property column index mapping
+    let mut string_col_idx = 0usize;
+    let mut int_col_idx = 0usize;
+    let mut float_col_idx = 0usize;
+    let mut bool_col_idx = 0usize;
 
-        struct ColMapping {
-            kind: &'static str,
-            col_index: usize,
-        }
-
-        let mut mappings: Vec<ColMapping> = Vec::new();
-        for ptype in &prop_types {
-            match ptype.as_str() {
-                "string" => {
-                    mappings.push(ColMapping {
-                        kind: "string",
-                        col_index: string_col_idx,
-                    });
-                    string_col_idx += 1;
-                }
-                "integer" => {
-                    mappings.push(ColMapping {
-                        kind: "integer",
-                        col_index: int_col_idx,
-                    });
-                    int_col_idx += 1;
-                }
-                "double" => {
-                    mappings.push(ColMapping {
-                        kind: "double",
-                        col_index: float_col_idx,
-                    });
-                    float_col_idx += 1;
-                }
-                "boolean" => {
-                    mappings.push(ColMapping {
-                        kind: "boolean",
-                        col_index: bool_col_idx,
-                    });
-                    bool_col_idx += 1;
-                }
-                _ => {
-                    mappings.push(ColMapping {
-                        kind: "string",
-                        col_index: string_col_idx,
-                    });
-                    string_col_idx += 1;
-                }
-            }
-        }
-
-        // Parse features
-        let mut features = Vec::with_capacity(n_features);
-        for i in 0..n_features {
-            let geom = wkb_to_geometry(&wkb_list[i]);
-            if let Some(geometry) = geom {
-                let mut properties = Vec::with_capacity(prop_names.len());
-                for mapping in &mappings {
-                    let prop = match mapping.kind {
-                        "string" => {
-                            if mapping.col_index < string_columns.len() {
-                                let col = &string_columns[mapping.col_index];
-                                if i < col.len() {
-                                    match &col[i] {
-                                        Some(s) => PropertyValue::String(s.clone()),
-                                        None => PropertyValue::Null,
-                                    }
-                                } else {
-                                    PropertyValue::Null
-                                }
-                            } else {
-                                PropertyValue::Null
-                            }
-                        }
-                        "integer" => {
-                            if mapping.col_index < int_columns.len() {
-                                let col = &int_columns[mapping.col_index];
-                                if i < col.len() {
-                                    match col[i] {
-                                        Some(v) => PropertyValue::Int(v),
-                                        None => PropertyValue::Null,
-                                    }
-                                } else {
-                                    PropertyValue::Null
-                                }
-                            } else {
-                                PropertyValue::Null
-                            }
-                        }
-                        "double" => {
-                            if mapping.col_index < float_columns.len() {
-                                let col = &float_columns[mapping.col_index];
-                                if i < col.len() {
-                                    match col[i] {
-                                        Some(v) if v.is_nan() => PropertyValue::Null,
-                                        Some(v) => PropertyValue::Double(v),
-                                        None => PropertyValue::Null,
-                                    }
-                                } else {
-                                    PropertyValue::Null
-                                }
-                            } else {
-                                PropertyValue::Null
-                            }
-                        }
-                        "boolean" => {
-                            if mapping.col_index < bool_columns.len() {
-                                let col = &bool_columns[mapping.col_index];
-                                if i < col.len() {
-                                    match col[i] {
-                                        Some(v) => PropertyValue::Bool(v),
-                                        None => PropertyValue::Null,
-                                    }
-                                } else {
-                                    PropertyValue::Null
-                                }
-                            } else {
-                                PropertyValue::Null
-                            }
-                        }
-                        _ => PropertyValue::Null,
-                    };
-                    properties.push(prop);
-                }
-
-                let id = if generate_ids {
-                    Some((i as u64 + 1) + id_offset)
-                } else {
-                    None
-                };
-
-                features.push(Feature {
-                    id,
-                    geometry,
-                    properties,
-                });
-            }
-        }
-
-        if generate_ids {
-            id_offset += features.len() as u64;
-        }
-
-        result.push(LayerData {
-            name,
-            features,
-            prop_names,
-            prop_types,
-            min_zoom: layer_min_zoom,
-            max_zoom: layer_max_zoom,
-        });
+    struct ColMapping {
+        kind: &'static str,
+        col_index: usize,
     }
 
-    Ok(result)
+    let mut mappings: Vec<ColMapping> = Vec::new();
+    for ptype in &prop_types {
+        match ptype.as_str() {
+            "string" => {
+                mappings.push(ColMapping {
+                    kind: "string",
+                    col_index: string_col_idx,
+                });
+                string_col_idx += 1;
+            }
+            "integer" => {
+                mappings.push(ColMapping {
+                    kind: "integer",
+                    col_index: int_col_idx,
+                });
+                int_col_idx += 1;
+            }
+            "double" => {
+                mappings.push(ColMapping {
+                    kind: "double",
+                    col_index: float_col_idx,
+                });
+                float_col_idx += 1;
+            }
+            "boolean" => {
+                mappings.push(ColMapping {
+                    kind: "boolean",
+                    col_index: bool_col_idx,
+                });
+                bool_col_idx += 1;
+            }
+            _ => {
+                mappings.push(ColMapping {
+                    kind: "string",
+                    col_index: string_col_idx,
+                });
+                string_col_idx += 1;
+            }
+        }
+    }
+
+    // Parse features
+    let mut features = Vec::with_capacity(n_features);
+    for i in 0..n_features {
+        let geom = wkb_to_geometry(&wkb_list[i]);
+        if let Some(geometry) = geom {
+            let mut properties = Vec::with_capacity(prop_names.len());
+            for mapping in &mappings {
+                let prop = match mapping.kind {
+                    "string" => {
+                        if mapping.col_index < string_columns.len() {
+                            let col = &string_columns[mapping.col_index];
+                            if i < col.len() {
+                                match &col[i] {
+                                    Some(s) => PropertyValue::String(s.clone()),
+                                    None => PropertyValue::Null,
+                                }
+                            } else {
+                                PropertyValue::Null
+                            }
+                        } else {
+                            PropertyValue::Null
+                        }
+                    }
+                    "integer" => {
+                        if mapping.col_index < int_columns.len() {
+                            let col = &int_columns[mapping.col_index];
+                            if i < col.len() {
+                                match col[i] {
+                                    Some(v) => PropertyValue::Int(v),
+                                    None => PropertyValue::Null,
+                                }
+                            } else {
+                                PropertyValue::Null
+                            }
+                        } else {
+                            PropertyValue::Null
+                        }
+                    }
+                    "double" => {
+                        if mapping.col_index < float_columns.len() {
+                            let col = &float_columns[mapping.col_index];
+                            if i < col.len() {
+                                match col[i] {
+                                    Some(v) if v.is_nan() => PropertyValue::Null,
+                                    Some(v) => PropertyValue::Double(v),
+                                    None => PropertyValue::Null,
+                                }
+                            } else {
+                                PropertyValue::Null
+                            }
+                        } else {
+                            PropertyValue::Null
+                        }
+                    }
+                    "boolean" => {
+                        if mapping.col_index < bool_columns.len() {
+                            let col = &bool_columns[mapping.col_index];
+                            if i < col.len() {
+                                match col[i] {
+                                    Some(v) => PropertyValue::Bool(v),
+                                    None => PropertyValue::Null,
+                                }
+                            } else {
+                                PropertyValue::Null
+                            }
+                        } else {
+                            PropertyValue::Null
+                        }
+                    }
+                    _ => PropertyValue::Null,
+                };
+                properties.push(prop);
+            }
+
+            let id = if generate_ids {
+                Some((i as u64 + 1) + id_offset)
+            } else {
+                None
+            };
+
+            features.push(Feature {
+                id,
+                geometry,
+                properties,
+            });
+        }
+    }
+
+    if generate_ids {
+        *offset += features.len() as u64;
+    }
+
+    Ok(LayerData {
+        name,
+        features,
+        prop_names,
+        prop_types,
+        min_zoom: layer_min_zoom,
+        max_zoom: layer_max_zoom,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Main tiling function
 // ---------------------------------------------------------------------------
+
+/// Map the Python-side sentinel values (negative = unset) to a TileConfig.
+#[allow(clippy::too_many_arguments)]
+fn make_config(
+    tile_format: &str,
+    min_zoom: u8,
+    max_zoom: u8,
+    base_zoom: i32,
+    do_simplify: bool,
+    drop_rate: f64,
+    cluster_distance: f64,
+    cluster_maxzoom: i32,
+    do_coalesce: bool,
+) -> TileConfig {
+    TileConfig {
+        tile_format: match tile_format {
+            "mlt" => TileFormat::Mlt,
+            _ => TileFormat::Mvt,
+        },
+        min_zoom,
+        max_zoom,
+        base_zoom: if base_zoom < 0 {
+            None
+        } else {
+            Some(base_zoom as u8)
+        },
+        simplification: do_simplify,
+        drop_rate: if drop_rate > 0.0 {
+            Some(drop_rate)
+        } else {
+            None
+        },
+        cluster_distance: if cluster_distance > 0.0 {
+            Some(cluster_distance)
+        } else {
+            None
+        },
+        cluster_maxzoom: if cluster_maxzoom >= 0 {
+            Some(cluster_maxzoom as u8)
+        } else {
+            None
+        },
+        coalesce: do_coalesce,
+    }
+}
+
+/// Multi-layer tiling with one layer in memory at a time. Layers are added
+/// in output order; the archive is byte-identical to `_freestile` with the
+/// same layers.
+#[pyclass(module = "freestiler._freestiler")]
+struct _LayeredTiler {
+    inner: Option<engine::LayeredTiler>,
+    generate_ids: bool,
+    id_offset: u64,
+    features: usize,
+    quiet: bool,
+}
+
+#[pymethods]
+impl _LayeredTiler {
+    #[new]
+    #[pyo3(signature = (tile_format, min_zoom, max_zoom, base_zoom, do_simplify,
+        generate_ids, quiet, drop_rate, cluster_distance, cluster_maxzoom, do_coalesce))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        tile_format: &str,
+        min_zoom: u8,
+        max_zoom: u8,
+        base_zoom: i32,
+        do_simplify: bool,
+        generate_ids: bool,
+        quiet: bool,
+        drop_rate: f64,
+        cluster_distance: f64,
+        cluster_maxzoom: i32,
+        do_coalesce: bool,
+    ) -> PyResult<Self> {
+        let config = make_config(
+            tile_format,
+            min_zoom,
+            max_zoom,
+            base_zoom,
+            do_simplify,
+            drop_rate,
+            cluster_distance,
+            cluster_maxzoom,
+            do_coalesce,
+        );
+        let inner = engine::LayeredTiler::new(config)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e)))?;
+        Ok(Self {
+            inner: Some(inner),
+            generate_ids,
+            id_offset: 0,
+            features: 0,
+            quiet,
+        })
+    }
+
+    /// Parse, tile and spool one layer dict (as built by `_preprocess_layer`).
+    /// Returns the number of features tiled.
+    fn add_layer(&mut self, py: Python<'_>, layer: Py<PyAny>) -> PyResult<usize> {
+        let tiler = self.inner.as_mut().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("tiler already finished")
+        })?;
+        let data = parse_layer_from_py(py, &layer, self.generate_ids, &mut self.id_offset)?;
+        drop(layer);
+        let count = data.features.len();
+        self.features += count;
+        let quiet = self.quiet;
+        py.detach(|| {
+            let reporter: Box<dyn ProgressReporter> = if quiet {
+                Box::new(engine::SilentReporter)
+            } else {
+                Box::new(PyReporter)
+            };
+            tiler.add_layer(data, reporter.as_ref())
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e)))?;
+        Ok(count)
+    }
+
+    /// Write the archive. The tiler cannot be used afterwards.
+    fn finish(&mut self, py: Python<'_>, output_path: &str) -> PyResult<String> {
+        let tiler = self.inner.take().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("tiler already finished")
+        })?;
+        if self.features == 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "No valid features to tile",
+            ));
+        }
+        let quiet = self.quiet;
+        let output = output_path.to_string();
+        py.detach(move || {
+            let reporter: Box<dyn ProgressReporter> = if quiet {
+                Box::new(engine::SilentReporter)
+            } else {
+                Box::new(PyReporter)
+            };
+            tiler.finish(&output, reporter.as_ref())
+        })
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e)))?;
+        Ok(output_path.to_string())
+    }
+}
 
 #[pyfunction]
 #[pyo3(signature = (layers, output_path, tile_format, min_zoom, max_zoom,
@@ -276,36 +431,17 @@ fn _freestile(
         ));
     }
 
-    let config = TileConfig {
-        tile_format: match tile_format {
-            "mlt" => TileFormat::Mlt,
-            _ => TileFormat::Mvt,
-        },
+    let config = make_config(
+        tile_format,
         min_zoom,
         max_zoom,
-        base_zoom: if base_zoom < 0 {
-            None
-        } else {
-            Some(base_zoom as u8)
-        },
-        simplification: do_simplify,
-        drop_rate: if drop_rate > 0.0 {
-            Some(drop_rate)
-        } else {
-            None
-        },
-        cluster_distance: if cluster_distance > 0.0 {
-            Some(cluster_distance)
-        } else {
-            None
-        },
-        cluster_maxzoom: if cluster_maxzoom >= 0 {
-            Some(cluster_maxzoom as u8)
-        } else {
-            None
-        },
-        coalesce: do_coalesce,
-    };
+        base_zoom,
+        do_simplify,
+        drop_rate,
+        cluster_distance,
+        cluster_maxzoom,
+        do_coalesce,
+    );
 
     match engine::generate_pmtiles(&layer_data, output_path, &config, reporter.as_ref()) {
         Ok(()) => Ok(output_path.to_string()),
@@ -592,6 +728,7 @@ fn _freestile_duckdb(
 fn _freestiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_cluster_layers, m)?)?;
     m.add_function(wrap_pyfunction!(_freestile, m)?)?;
+    m.add_class::<_LayeredTiler>()?;
     #[cfg(feature = "geoparquet")]
     m.add_function(wrap_pyfunction!(_cluster_file, m)?)?;
     #[cfg(feature = "geoparquet")]
