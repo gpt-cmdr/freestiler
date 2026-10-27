@@ -35,3 +35,69 @@ def test_gzip_level_shrinks_without_changing_tiles(tmp_path):
 def test_gzip_level_rejects_out_of_range(tmp_path, level):
     with pytest.raises(ValueError, match="gzip_level"):
         freestile(_mesh(), tmp_path / "x.pmtiles", max_zoom=10, quiet=True, gzip_level=level)
+
+
+def _layers():
+    from freestiler import freestile_layer
+
+    shifted = _mesh()
+    shifted["depth"] = [k * 0.25 for k in range(len(shifted))]
+    return {"cells": _mesh(), "depth": freestile_layer(shifted, min_zoom=10)}
+
+
+@pytest.mark.parametrize("tile_format", ["mvt", "mlt"])
+def test_gzip_level_layered_matches_in_memory(tmp_path, tile_format):
+    pytest.importorskip("pmtiles")
+    from freestiler import _preprocess_layer, freestile_layers
+    from freestiler._freestiler import _freestile
+
+    layers = _layers()
+    rust_layers = [
+        _preprocess_layer(getattr(v, "input", v), name, getattr(v, "min_zoom", None) or 8, 14, True)
+        for name, v in layers.items()
+    ]
+    memory = tmp_path / "memory6.pmtiles"
+    _freestile(rust_layers, str(memory), tile_format, 8, 14, -1, True, True, True,
+               -1.0, -1.0, -1, False, gzip_level=6)
+    layered = freestile_layers(_layers(), tmp_path / "layered6.pmtiles", tile_format=tile_format,
+                               min_zoom=8, max_zoom=14, quiet=True, gzip_level=6)
+    routed = freestile(_layers(), tmp_path / "routed6.pmtiles", tile_format=tile_format,
+                       min_zoom=8, max_zoom=14, quiet=True, gzip_level=6)
+    default = freestile_layers(_layers(), tmp_path / "layered1.pmtiles", tile_format=tile_format,
+                               min_zoom=8, max_zoom=14, quiet=True)
+    # Same compressor on the same raw tiles: identical archives.
+    assert memory.read_bytes() == layered.read_bytes() == routed.read_bytes()
+    # Only the compression differs from the default level.
+    assert layered.stat().st_size < default.stat().st_size
+    assert _tiles(layered) == _tiles(default) == _tiles(memory)
+
+
+def test_gzip_level_single_layer_matches_layered(tmp_path):
+    pytest.importorskip("pmtiles")
+    from freestiler import freestile_layers
+
+    single = freestile(_mesh(), tmp_path / "single6.pmtiles", layer_name="cells",
+                       min_zoom=8, max_zoom=14, quiet=True, gzip_level=6)
+    layered = freestile_layers({"cells": _mesh()}, tmp_path / "layered6.pmtiles",
+                               min_zoom=8, max_zoom=14, quiet=True, gzip_level=6)
+    assert single.read_bytes() == layered.read_bytes()
+    assert len(_tiles(single)) > 10
+
+
+@pytest.mark.parametrize("level", [-1, 10, 2.5, True, "6"])
+def test_gzip_level_layered_rejects_bad_levels(tmp_path, level):
+    from freestiler import freestile_layers
+
+    out = tmp_path / "x.pmtiles"
+    with pytest.raises(ValueError, match="gzip_level"):
+        freestile_layers(_layers(), out, max_zoom=10, quiet=True, gzip_level=level)
+    with pytest.raises(ValueError, match="gzip_level"):
+        freestile(_layers(), out, max_zoom=10, quiet=True, gzip_level=level)
+    assert not out.exists()
+
+
+def test_gzip_level_rust_layered_tiler_refuses_bad_level():
+    from freestiler._freestiler import _LayeredTiler
+
+    with pytest.raises(RuntimeError, match="gzip_level"):
+        _LayeredTiler("mvt", 0, 10, -1, True, True, True, -1.0, -1.0, -1, False, 12)

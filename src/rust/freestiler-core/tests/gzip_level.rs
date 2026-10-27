@@ -25,7 +25,10 @@ fn mesh() -> LayerData {
             features.push(Feature {
                 id: Some(k as u64 + 1),
                 geometry: Geometry::Polygon(Polygon::new(ring, vec![])),
-                properties: vec![PropertyValue::Int(k), PropertyValue::Double(k as f64 * 0.01)],
+                properties: vec![
+                    PropertyValue::Int(k),
+                    PropertyValue::Double(k as f64 * 0.01),
+                ],
             });
         }
     }
@@ -80,10 +83,24 @@ fn higher_level_shrinks_archive_without_changing_it_otherwise() {
     std::fs::create_dir(&dir).unwrap();
     let fast = dir.join("fast.pmtiles");
     let best = dir.join("best.pmtiles");
-    generate_pmtiles(&[mesh()], fast.to_str().unwrap(), &config(None), &SilentReporter).unwrap();
-    generate_pmtiles(&[mesh()], best.to_str().unwrap(), &config(Some(9)), &SilentReporter)
-        .unwrap();
-    let (a, b) = (std::fs::metadata(&fast).unwrap().len(), std::fs::metadata(&best).unwrap().len());
+    generate_pmtiles(
+        &[mesh()],
+        fast.to_str().unwrap(),
+        &config(None),
+        &SilentReporter,
+    )
+    .unwrap();
+    generate_pmtiles(
+        &[mesh()],
+        best.to_str().unwrap(),
+        &config(Some(9)),
+        &SilentReporter,
+    )
+    .unwrap();
+    let (a, b) = (
+        std::fs::metadata(&fast).unwrap().len(),
+        std::fs::metadata(&best).unwrap().len(),
+    );
     assert!(b < a, "level 9 {b} >= level 1 {a}");
     let tiles = |path: &std::path::Path| {
         let mut archive =
@@ -96,7 +113,10 @@ fn higher_level_shrinks_archive_without_changing_it_otherwise() {
     };
     let decoded = tiles(&fast);
     assert!(decoded.len() > 10);
-    assert!(decoded == tiles(&best), "tile contents differ between gzip levels");
+    assert!(
+        decoded == tiles(&best),
+        "tile contents differ between gzip levels"
+    );
     let refused = dir.join("refused.pmtiles");
     let error = generate_pmtiles(
         &[mesh()],

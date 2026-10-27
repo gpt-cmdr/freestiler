@@ -126,6 +126,67 @@ impl Drop for TileSpool {
     }
 }
 
+/// Append-only disk spool of raw byte ranges, read back by extent. Deleted on
+/// drop. Holds per-layer tile encodings until tiles are assembled.
+pub struct RawSpool {
+    path: PathBuf,
+    writer: BufWriter<File>,
+    reader: File,
+    offset: u64,
+}
+
+impl RawSpool {
+    pub fn new() -> Result<Self, String> {
+        let (file, path) =
+            create_exclusive_temp(&std::env::temp_dir(), "freestiler_layers", true)?;
+        let reader = file
+            .try_clone()
+            .map_err(|e| format!("Cannot reopen layer spool: {}", e))?;
+        Ok(Self {
+            path,
+            writer: BufWriter::new(file),
+            reader,
+            offset: 0,
+        })
+    }
+
+    /// Append bytes and return their `(offset, length)` extent.
+    pub fn append(&mut self, bytes: &[u8]) -> Result<(u64, u32), String> {
+        let length =
+            u32::try_from(bytes.len()).map_err(|_| "Tile layer larger than 4 GiB".to_string())?;
+        self.writer
+            .write_all(bytes)
+            .map_err(|e| format!("Cannot write layer spool: {}", e))?;
+        let extent = (self.offset, length);
+        self.offset += u64::from(length);
+        Ok(extent)
+    }
+
+    /// Append the bytes of `extent` to `out`.
+    pub fn read_into(&mut self, extent: (u64, u32), out: &mut Vec<u8>) -> Result<(), String> {
+        use std::io::Read;
+        if extent.0.checked_add(u64::from(extent.1)).map_or(true, |end| end > self.offset) {
+            return Err("Layer spool extent out of range".to_string());
+        }
+        self.writer
+            .flush()
+            .map_err(|e| format!("Cannot flush layer spool: {}", e))?;
+        let start = out.len();
+        out.resize(start + extent.1 as usize, 0);
+        self.reader
+            .seek(SeekFrom::Start(extent.0))
+            .and_then(|_| self.reader.read_exact(&mut out[start..]))
+            .map_err(|e| format!("Cannot read layer spool: {}", e))
+    }
+}
+
+impl Drop for RawSpool {
+    fn drop(&mut self) {
+        let _ = self.writer.flush();
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Removes the file at `path` on drop unless disarmed.
 struct TempFileGuard {
     path: PathBuf,

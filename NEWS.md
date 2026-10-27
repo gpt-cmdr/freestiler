@@ -6,6 +6,20 @@
   an 87,039-cell HEC-RAS mesh (z10-15) level 6 makes the archive 14% smaller
   (13.8 to 11.9 MB) for about 10% more tiling time.
 
+* Multi-layer tilesets no longer hold every layer in memory. A new Rust
+  `LayeredTiler` tiles one layer at a time, spools its per-tile encodings to a
+  temporary file, and assembles each tile from its layers at the end. In both
+  MVT and MLT a tile is a sequence of independently encoded layers, so the
+  archive is byte-identical to the all-layer path. Python's `freestile()` uses
+  it for every multi-layer call, and the new `freestile_layers()` accepts
+  `(name, source)` pairs or a generator, where a source may be a GeoDataFrame,
+  a `FreestileLayer`, a GeoParquet path or a callable, so only one layer is
+  loaded at a time on the Python side too.
+
+* Feature coalescing (`coalesce = TRUE`) now groups features in order of first
+  appearance instead of hash-map order, so its output is reproducible from run
+  to run.
+
 * `freestile()` now accepts `category`, `category_values`, and
   `cluster_min_points` for a single POINT sf object or GeoDataFrame. Category
   counts use the same Supercluster engine as file clustering, with individual
