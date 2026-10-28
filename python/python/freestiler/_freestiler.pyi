@@ -14,6 +14,7 @@ def _freestile(
     cluster_distance: float,
     cluster_maxzoom: int,
     do_coalesce: bool,
+    gzip_level: int | None = None,
 ) -> str: ...
 
 def _freestile_file(
@@ -81,6 +82,7 @@ class _LayeredTiler:
         cluster_distance: float,
         cluster_maxzoom: int,
         do_coalesce: bool,
+        gzip_level: int | None = None,
     ) -> None: ...
     def add_layer(self, layer: dict) -> int: ...
     def finish(self, output_path: str) -> str: ...

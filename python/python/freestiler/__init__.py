@@ -99,6 +99,7 @@ def freestile(
     category: str | None = None,
     category_values: list | None = None,
     cluster_min_points: int = 2,
+    gzip_level: int | None = None,
 ) -> Path:
     """Create a PMTiles archive from geospatial data.
 
@@ -150,6 +151,10 @@ def freestile(
         Missing and unlisted values count toward category:_other.
     cluster_min_points : int
         Minimum points per categorical cluster (default 2).
+    gzip_level : int, optional
+        Gzip level 0-9 for tile data. None keeps the fast level 1. Tile
+        contents are unchanged; level 6 makes HEC-RAS mesh archives about
+        14% smaller at a modest encode cost.
 
     Returns
     -------
@@ -198,6 +203,10 @@ def freestile(
             raise ValueError("category_values must be distinct, uniformly typed strings or JS-safe integers")
     elif cluster_min_points != 2:
         raise ValueError("cluster_min_points requires category and category_values")
+    if gzip_level is not None:
+        if categorical:
+            raise ValueError("gzip_level is not supported with categorical clustering")
+        gzip_level = _check_gzip_level(gzip_level)
 
     # Determine default layer_name
     if layer_name is None and isinstance(input, gpd.GeoDataFrame):
@@ -237,6 +246,7 @@ def freestile(
             drop_rate=drop_rate, cluster_distance=cluster_distance,
             cluster_maxzoom=cluster_maxzoom, coalesce=coalesce,
             simplification=simplification, generate_ids=generate_ids, quiet=quiet,
+            gzip_level=gzip_level,
         )
         if not quiet:
             print(f"Created {output} ({_format_size(output.stat().st_size)})")
@@ -279,6 +289,7 @@ def freestile(
             cluster_distance=cluster_distance if cluster_distance is not None else -1.0,
             cluster_maxzoom=cluster_maxzoom if cluster_maxzoom is not None else -1,
             do_coalesce=coalesce,
+            gzip_level=gzip_level,
         )
 
     if not quiet:
@@ -310,6 +321,7 @@ def freestile_layers(
     generate_ids: bool = True,
     overwrite: bool = True,
     quiet: bool = False,
+    gzip_level: int | None = None,
 ) -> Path:
     """Create a multi-layer PMTiles archive holding one layer in memory at a time.
 
@@ -329,7 +341,8 @@ def freestile_layers(
     output : str or Path
         Output path for the .pmtiles file.
 
-    The remaining options have the same meaning as in ``freestile()``.
+    The remaining options, including ``gzip_level``, have the same meaning
+    as in ``freestile()``.
     Categorical clustering is not available here.
 
     Returns
@@ -339,6 +352,8 @@ def freestile_layers(
     """
     if tile_format not in ("mlt", "mvt"):
         raise ValueError(f"tile_format must be 'mlt' or 'mvt', got '{tile_format}'")
+    if gzip_level is not None:
+        gzip_level = _check_gzip_level(gzip_level)
     output = Path(output).resolve()
     if output.exists() and not overwrite:
         raise FileExistsError(
@@ -350,16 +365,24 @@ def freestile_layers(
         max_zoom=max_zoom, base_zoom=base_zoom, drop_rate=drop_rate,
         cluster_distance=cluster_distance, cluster_maxzoom=cluster_maxzoom,
         coalesce=coalesce, simplification=simplification,
-        generate_ids=generate_ids, quiet=quiet,
+        generate_ids=generate_ids, quiet=quiet, gzip_level=gzip_level,
     )
     if not quiet:
         print(f"Created {output} ({_format_size(output.stat().st_size)})")
     return output
 
 
+def _check_gzip_level(gzip_level) -> int:
+    if isinstance(gzip_level, bool) or not isinstance(gzip_level, (int, np.integer)) \
+            or not 0 <= gzip_level <= 9:
+        raise ValueError("gzip_level must be an integer from 0 to 9")
+    return int(gzip_level)
+
+
 def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
                   base_zoom, drop_rate, cluster_distance, cluster_maxzoom,
-                  coalesce, simplification, generate_ids, quiet) -> None:
+                  coalesce, simplification, generate_ids, quiet,
+                  gzip_level=None) -> None:
     tiler = _LayeredTiler(
         tile_format, min_zoom, max_zoom,
         base_zoom if base_zoom is not None else -1,
@@ -368,6 +391,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
         cluster_distance if cluster_distance is not None else -1.0,
         cluster_maxzoom if cluster_maxzoom is not None else -1,
         coalesce,
+        gzip_level,
     )
     seen = set()
     for name, source in pairs:

@@ -14,10 +14,8 @@ impl Scratch {
     fn new() -> Self {
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "freestiler_layered_{}_{id}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("freestiler_layered_{}_{id}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir(&path).unwrap();
         Self(path)
@@ -143,6 +141,7 @@ fn config(format: TileFormat, variant: u8) -> TileConfig {
         cluster_distance: (variant == 2).then_some(40.0),
         cluster_maxzoom: (variant == 2).then_some(11),
         coalesce: variant == 3,
+        gzip_level: (variant == 4).then_some(6),
     }
 }
 
@@ -162,8 +161,9 @@ fn layered(path: &str, format: TileFormat, variant: u8) {
 fn layered_archive_is_byte_identical_to_in_memory() {
     let scratch = Scratch::new();
     for format in [TileFormat::Mvt, TileFormat::Mlt] {
-        // 0: default snapping, 1: no snapping, 2: point clustering, 3: coalesce
-        for variant in 0..4 {
+        // 0: default snapping, 1: no snapping, 2: point clustering, 3: coalesce,
+        // 4: gzip level 6
+        for variant in 0..5 {
             let a = scratch.file(&format!("memory_{format:?}_{variant}.pmtiles"));
             let b = scratch.file(&format!("layered_{format:?}_{variant}.pmtiles"));
             generate_pmtiles(&layers(), &a, &config(format, variant), &SilentReporter).unwrap();
@@ -192,4 +192,12 @@ fn layered_without_tiles_fails_like_in_memory() {
     let error = tiler.finish(&out, &SilentReporter).unwrap_err();
     assert!(error.contains("No tiles"), "{error}");
     assert!(!std::path::Path::new(&out).exists());
+}
+
+#[test]
+fn layered_refuses_bad_gzip_level_before_output() {
+    let mut bad = config(TileFormat::Mvt, 0);
+    bad.gzip_level = Some(12);
+    let error = LayeredTiler::new(bad).err().expect("level 12 must refuse");
+    assert!(error.contains("gzip_level"), "{error}");
 }

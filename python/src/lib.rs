@@ -250,6 +250,7 @@ fn make_config(
     cluster_distance: f64,
     cluster_maxzoom: i32,
     do_coalesce: bool,
+    gzip_level: Option<u32>,
 ) -> TileConfig {
     TileConfig {
         tile_format: match tile_format {
@@ -280,6 +281,7 @@ fn make_config(
             None
         },
         coalesce: do_coalesce,
+        gzip_level,
     }
 }
 
@@ -299,7 +301,8 @@ struct _LayeredTiler {
 impl _LayeredTiler {
     #[new]
     #[pyo3(signature = (tile_format, min_zoom, max_zoom, base_zoom, do_simplify,
-        generate_ids, quiet, drop_rate, cluster_distance, cluster_maxzoom, do_coalesce))]
+        generate_ids, quiet, drop_rate, cluster_distance, cluster_maxzoom, do_coalesce,
+        gzip_level=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         tile_format: &str,
@@ -313,6 +316,7 @@ impl _LayeredTiler {
         cluster_distance: f64,
         cluster_maxzoom: i32,
         do_coalesce: bool,
+        gzip_level: Option<u32>,
     ) -> PyResult<Self> {
         let config = make_config(
             tile_format,
@@ -324,9 +328,11 @@ impl _LayeredTiler {
             cluster_distance,
             cluster_maxzoom,
             do_coalesce,
+            gzip_level,
         );
-        let inner = engine::LayeredTiler::new(config)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e)))?;
+        let inner = engine::LayeredTiler::new(config).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e))
+        })?;
         Ok(Self {
             inner: Some(inner),
             generate_ids,
@@ -387,7 +393,7 @@ impl _LayeredTiler {
 #[pyfunction]
 #[pyo3(signature = (layers, output_path, tile_format, min_zoom, max_zoom,
     base_zoom, do_simplify, generate_ids, quiet, drop_rate, cluster_distance,
-    cluster_maxzoom, do_coalesce))]
+    cluster_maxzoom, do_coalesce, gzip_level=None))]
 fn _freestile(
     py: Python<'_>,
     layers: Vec<Py<PyAny>>,
@@ -403,6 +409,7 @@ fn _freestile(
     cluster_distance: f64,
     cluster_maxzoom: i32,
     do_coalesce: bool,
+    gzip_level: Option<u32>,
 ) -> PyResult<String> {
     // Parse layers from Python dicts
     let parse_start = Instant::now();
@@ -441,6 +448,7 @@ fn _freestile(
         cluster_distance,
         cluster_maxzoom,
         do_coalesce,
+        gzip_level,
     );
 
     match engine::generate_pmtiles(&layer_data, output_path, &config, reporter.as_ref()) {
@@ -520,6 +528,7 @@ fn _freestile_file(
             None
         },
         coalesce: do_coalesce,
+        gzip_level: None,
     };
 
     match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {
@@ -589,6 +598,7 @@ fn _freestile_duckdb_query(
             None
         },
         coalesce: do_coalesce,
+        gzip_level: None,
     };
 
     let maybe_stream = match streaming_mode {
@@ -712,6 +722,7 @@ fn _freestile_duckdb(
             None
         },
         coalesce: do_coalesce,
+        gzip_level: None,
     };
 
     match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {

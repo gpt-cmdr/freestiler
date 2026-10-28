@@ -1,5 +1,11 @@
 # freestiler 0.3.0.9000
 
+* New `gzip_level` option (Python `freestile(gzip_level=)`, Rust
+  `TileConfig::gzip_level`) sets the gzip level of tile data in the in-memory
+  pipeline. The default stays the fast level 1; tile contents never change. On
+  an 87,039-cell HEC-RAS mesh (z10-15) level 6 makes the archive 14% smaller
+  (13.8 to 11.9 MB) for about 10% more tiling time.
+
 * Multi-layer tilesets no longer hold every layer in memory. A new Rust
   `LayeredTiler` tiles one layer at a time, spools its per-tile encodings to a
   temporary file, and assembles each tile from its layers at the end. In both
