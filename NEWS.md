@@ -1,5 +1,15 @@
 # freestiler 0.3.0.9000
 
+* Multi-layer tilesets are now tiled one layer at a time, so peak memory
+  follows the largest layer instead of the sum of all layers (#17). Each
+  layer's tiles are spooled to a temporary file and joined per tile at the
+  end. MVT and MLT tiles are sequences of independently encoded layers, so the
+  archive is byte-identical to tiling every layer at once. `freestile()` uses
+  this for every multi-layer call in R and Python. The new Python
+  `freestile_layers()` also loads layers lazily: it accepts `(name, source)`
+  pairs or a generator, where a source is a GeoDataFrame, a `FreestileLayer`,
+  a GeoParquet path or a callable.
+
 * `freestile()` now accepts `category`, `category_values`, and
   `cluster_min_points` for a single POINT sf object or GeoDataFrame. Category
   counts use the same Supercluster engine as file clustering, with individual

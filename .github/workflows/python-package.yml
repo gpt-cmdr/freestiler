@@ -36,6 +36,8 @@ jobs:
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test coalesce_order
       - name: Test tile gzip levels
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test gzip_level
+      - name: Test layered multi-layer tiling against the in-memory engine
+        run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test layered
 
   build-wheels:
     name: Build Wheel (${{ matrix.os }}, py${{ matrix.python-version }})
