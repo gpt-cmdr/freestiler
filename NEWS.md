@@ -11,6 +11,12 @@
   groups were emitted in hash-map order, which changes from run to run; they
   now keep the order in which their first feature appears in the tile.
 
+* `freestile()` gains `gzip_level` in R and Python to set the gzip level of
+  tile data (0-9). The default stays the fast level 1, so existing output is
+  unchanged. Higher levels only change compression: decompressed tiles are
+  identical. On a dense polygon grid, level 6 made the archive 14% smaller
+  for about 17% more tiling time; on scattered points the saving was 6%.
+
 # freestiler 0.3.0
 
 * MVT output with `simplification = FALSE` now preserves line positions when
