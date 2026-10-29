@@ -36,6 +36,12 @@ jobs:
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test gzip_level
       - name: Test layered multi-layer tiling against the in-memory engine
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test layered
+      - name: Test the tile buffer and collapsed-line fallback
+        run: |
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test buffer
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test line_collapse
+      - name: Test Arrow input and pure-Rust reprojection
+        run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --features arrow --lib -- crs:: arrow_input:: mvt::
 
   build-wheels:
     name: Build Wheel (${{ matrix.os }}, py${{ matrix.python-version }})
