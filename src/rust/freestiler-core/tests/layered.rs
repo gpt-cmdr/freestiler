@@ -142,6 +142,7 @@ fn config(format: TileFormat, variant: u8) -> TileConfig {
         cluster_maxzoom: (variant == 2).then_some(11),
         coalesce: variant == 3,
         gzip_level: (variant == 4).then_some(6),
+        buffer: None,
     }
 }
 

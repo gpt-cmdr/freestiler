@@ -219,6 +219,34 @@ fn snap_ring(
     LineString(coords)
 }
 
+/// True when a line geometry has no segment longer than zero on this tile's
+/// pixel grid, so the encoder would drop it. Always false for points and
+/// polygons (collapsed polygons are kept as one-pixel dots by the encoders).
+pub fn line_collapses(geom: &Geometry, coord: &TileCoord) -> bool {
+    let parts: Vec<&LineString<f64>> = match geom {
+        Geometry::LineString(ls) => vec![ls],
+        Geometry::MultiLineString(mls) => mls.0.iter().collect(),
+        _ => return false,
+    };
+    let bounds = tile_bounds(coord);
+    let (west, east) = (bounds.min().x, bounds.max().x);
+    let south_merc = bounds.min().y.to_radians().tan().asinh();
+    let north_merc = bounds.max().y.to_radians().tan().asinh();
+    let pixel = |c: &Coord<f64>| {
+        let px = ((c.x - west) / (east - west) * EXTENT).round() as i64;
+        let lat_merc = c.y.to_radians().tan().asinh();
+        let py = ((north_merc - lat_merc) / (north_merc - south_merc) * EXTENT).round() as i64;
+        (px, py)
+    };
+    !parts.iter().any(|ls| {
+        let mut it = ls.0.iter().map(pixel);
+        match it.next() {
+            Some(first) => it.any(|p| p != first),
+            None => false,
+        }
+    })
+}
+
 fn is_valid_polygon(poly: &Polygon<f64>) -> bool {
     poly.exterior().0.len() >= 4 // 3 unique vertices + closing point
 }

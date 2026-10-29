@@ -251,6 +251,7 @@ fn make_config(
     cluster_maxzoom: i32,
     do_coalesce: bool,
     gzip_level: Option<u32>,
+    buffer: Option<f64>,
 ) -> TileConfig {
     TileConfig {
         tile_format: match tile_format {
@@ -282,6 +283,7 @@ fn make_config(
         },
         coalesce: do_coalesce,
         gzip_level,
+        buffer,
     }
 }
 
@@ -302,7 +304,7 @@ impl _LayeredTiler {
     #[new]
     #[pyo3(signature = (tile_format, min_zoom, max_zoom, base_zoom, do_simplify,
         generate_ids, quiet, drop_rate, cluster_distance, cluster_maxzoom, do_coalesce,
-        gzip_level=None))]
+        gzip_level=None, buffer=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         tile_format: &str,
@@ -317,6 +319,7 @@ impl _LayeredTiler {
         cluster_maxzoom: i32,
         do_coalesce: bool,
         gzip_level: Option<u32>,
+        buffer: Option<f64>,
     ) -> PyResult<Self> {
         let config = make_config(
             tile_format,
@@ -329,6 +332,7 @@ impl _LayeredTiler {
             cluster_maxzoom,
             do_coalesce,
             gzip_level,
+            buffer,
         );
         let inner = engine::LayeredTiler::new(config).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e))
@@ -365,7 +369,101 @@ impl _LayeredTiler {
         Ok(count)
     }
 
+    /// Read one layer from an Arrow C stream (any object with
+    /// `__arrow_c_stream__`: a pyarrow Table or RecordBatchReader, a
+    /// GeoDataFrame's `to_arrow()`, ...), reproject it to EPSG:4326 in Rust,
+    /// tile and spool it. Returns a dict report.
+    #[cfg(feature = "arrow")]
+    #[pyo3(signature = (name, source, min_zoom, max_zoom, geometry_column=None, crs=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_arrow_layer<'py>(
+        &mut self,
+        py: Python<'py>,
+        name: String,
+        source: Bound<'py, PyAny>,
+        min_zoom: u8,
+        max_zoom: u8,
+        geometry_column: Option<String>,
+        crs: Option<String>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+        use arrow_array::RecordBatchReader;
+        use freestiler_core::arrow_input::{batches_to_layer, ArrowLayerOptions};
+        use pyo3::types::{PyCapsule, PyCapsuleMethods};
+
+        let tiler = self.inner.as_mut().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("tiler already finished")
+        })?;
+        if !source.hasattr("__arrow_c_stream__")? {
+            return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "source must implement the Arrow PyCapsule stream interface (__arrow_c_stream__)",
+            ));
+        }
+        let capsule = source.call_method0("__arrow_c_stream__")?;
+        let capsule = capsule.cast::<PyCapsule>().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "__arrow_c_stream__ did not return a PyCapsule",
+            )
+        })?;
+        let pointer = capsule
+            .pointer_checked(Some(c"arrow_array_stream"))
+            .map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "capsule is not an arrow_array_stream",
+                )
+            })?;
+        // Moves the stream out of the capsule; the capsule's destructor then
+        // sees a released stream, as the PyCapsule interface prescribes.
+        let reader = unsafe {
+            ArrowArrayStreamReader::from_raw(pointer.as_ptr() as *mut FFI_ArrowArrayStream)
+        }
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Arrow stream: {e}"))
+        })?;
+        let opts = ArrowLayerOptions {
+            name,
+            min_zoom,
+            max_zoom,
+            geometry_column,
+            crs,
+            id_offset: self.generate_ids.then_some(self.id_offset),
+        };
+        let quiet = self.quiet;
+        let (count, report) = py
+            .detach(|| -> Result<_, String> {
+                let schema = reader.schema();
+                let batches = reader.map(|b| b.map_err(|e| e.to_string()));
+                let (data, report) = batches_to_layer(schema, batches, &opts)?;
+                let count = data.features.len();
+                if count == 0 {
+                    return Err(format!("layer '{}' has no features", data.name));
+                }
+                let reporter: Box<dyn ProgressReporter> = if quiet {
+                    Box::new(engine::SilentReporter)
+                } else {
+                    Box::new(PyReporter)
+                };
+                tiler.add_layer(data, reporter.as_ref())?;
+                Ok((count, report))
+            })
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Error: {}", e))
+            })?;
+        if self.generate_ids {
+            self.id_offset += count as u64;
+        }
+        self.features += count;
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("rows", report.rows)?;
+        d.set_item("features", report.features)?;
+        d.set_item("skipped_null_or_empty", report.skipped_null_or_empty)?;
+        d.set_item("skipped_columns", report.skipped_columns)?;
+        d.set_item("reprojection", report.reprojection)?;
+        Ok(d)
+    }
+
     /// Write the archive. The tiler cannot be used afterwards.
+
     fn finish(&mut self, py: Python<'_>, output_path: &str) -> PyResult<String> {
         let tiler = self.inner.take().ok_or_else(|| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("tiler already finished")
@@ -393,7 +491,7 @@ impl _LayeredTiler {
 #[pyfunction]
 #[pyo3(signature = (layers, output_path, tile_format, min_zoom, max_zoom,
     base_zoom, do_simplify, generate_ids, quiet, drop_rate, cluster_distance,
-    cluster_maxzoom, do_coalesce, gzip_level=None))]
+    cluster_maxzoom, do_coalesce, gzip_level=None, buffer=None))]
 fn _freestile(
     py: Python<'_>,
     layers: Vec<Py<PyAny>>,
@@ -410,6 +508,7 @@ fn _freestile(
     cluster_maxzoom: i32,
     do_coalesce: bool,
     gzip_level: Option<u32>,
+    buffer: Option<f64>,
 ) -> PyResult<String> {
     // Parse layers from Python dicts
     let parse_start = Instant::now();
@@ -449,6 +548,7 @@ fn _freestile(
         cluster_maxzoom,
         do_coalesce,
         gzip_level,
+        buffer,
     );
 
     match engine::generate_pmtiles(&layer_data, output_path, &config, reporter.as_ref()) {
@@ -529,6 +629,7 @@ fn _freestile_file(
         },
         coalesce: do_coalesce,
         gzip_level: None,
+        buffer: None,
     };
 
     match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {
@@ -599,6 +700,7 @@ fn _freestile_duckdb_query(
         },
         coalesce: do_coalesce,
         gzip_level: None,
+        buffer: None,
     };
 
     let maybe_stream = match streaming_mode {
@@ -723,6 +825,7 @@ fn _freestile_duckdb(
         },
         coalesce: do_coalesce,
         gzip_level: None,
+        buffer: None,
     };
 
     match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {
@@ -735,11 +838,53 @@ fn _freestile_duckdb(
 // PyO3 module registration
 // ---------------------------------------------------------------------------
 
+/// Reproject x/y coordinates to EPSG:4326 longitude/latitude with the same
+/// pure-Rust code path as Arrow input (for accuracy checks). Returns the
+/// PROJ string used (None for longitude/latitude input) and the coordinates.
+#[cfg(feature = "arrow")]
+#[pyfunction]
+fn _reproject_to_lonlat(
+    crs: &str,
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+) -> PyResult<(Option<String>, Vec<f64>, Vec<f64>)> {
+    use freestiler_core::crs::resolve;
+    use freestiler_core::geo_types::{MultiPoint, Point};
+    if xs.len() != ys.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "xs and ys differ in length",
+        ));
+    }
+    let source = resolve(crs).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    let mut g = Geometry::MultiPoint(MultiPoint(
+        xs.iter()
+            .zip(&ys)
+            .map(|(&x, &y)| Point::new(x, y))
+            .collect(),
+    ));
+    source
+        .to_lonlat(&mut g)
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    let Geometry::MultiPoint(mp) = g else {
+        unreachable!()
+    };
+    Ok((
+        source.proj_string().map(str::to_string).or_else(|| {
+            matches!(source, freestiler_core::crs::SourceCrs::WebMercator)
+                .then(|| "web-mercator".to_string())
+        }),
+        mp.0.iter().map(|p| p.x()).collect(),
+        mp.0.iter().map(|p| p.y()).collect(),
+    ))
+}
+
 #[pymodule]
 fn _freestiler(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_cluster_layers, m)?)?;
     m.add_function(wrap_pyfunction!(_freestile, m)?)?;
     m.add_class::<_LayeredTiler>()?;
+    #[cfg(feature = "arrow")]
+    m.add_function(wrap_pyfunction!(_reproject_to_lonlat, m)?)?;
     #[cfg(feature = "geoparquet")]
     m.add_function(wrap_pyfunction!(_cluster_file, m)?)?;
     #[cfg(feature = "geoparquet")]

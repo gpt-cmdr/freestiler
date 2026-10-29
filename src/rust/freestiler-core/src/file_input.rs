@@ -81,7 +81,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 #[cfg(any(feature = "geoparquet", feature = "duckdb"))]
-fn wkb_to_geometry(wkb_bytes: &[u8]) -> Option<Geometry> {
+pub(crate) fn wkb_to_geometry(wkb_bytes: &[u8]) -> Option<Geometry> {
     use geozero::wkb::Wkb;
     use geozero::ToGeo;
 
@@ -376,7 +376,7 @@ mod geoparquet_impl {
         Ok(()) // No geo metadata or no column entry — assume WGS84
     }
 
-    fn arrow_type_to_string(dt: &DataType) -> String {
+    pub(crate) fn arrow_type_to_string(dt: &DataType) -> String {
         match dt {
             DataType::Boolean => "logical".to_string(),
             DataType::Int8
@@ -405,7 +405,7 @@ mod geoparquet_impl {
         wkb_bytes.and_then(wkb_to_geometry)
     }
 
-    fn extract_property_value(col: &dyn Array, row: usize) -> Result<PropertyValue, String> {
+    pub(crate) fn extract_property_value(col: &dyn Array, row: usize) -> Result<PropertyValue, String> {
         if col.is_null(row) {
             return Ok(PropertyValue::Null);
         }
@@ -506,6 +506,8 @@ mod geoparquet_impl {
 pub use geoparquet_impl::parquet_to_layers;
 #[cfg(feature = "geoparquet")]
 pub use geoparquet_impl::ParquetPointSource;
+#[cfg(feature = "geoparquet")]
+pub(crate) use geoparquet_impl::{arrow_type_to_string, extract_property_value};
 
 /// SQL text transport for temporal and other non-numeric properties. Zoned
 /// timestamps use UTC regardless of the connection's TimeZone setting, without ICU.

@@ -1,8 +1,12 @@
+#[cfg(feature = "arrow")]
+pub mod arrow_input;
 pub mod clip;
 pub mod cluster;
 pub mod cluster_output;
 pub mod categorical_cluster;
 pub mod coalesce;
+#[cfg(feature = "reproject")]
+pub mod crs;
 pub mod drop;
 pub mod engine;
 #[cfg(any(feature = "geoparquet", feature = "duckdb"))]

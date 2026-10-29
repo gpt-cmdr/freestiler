@@ -331,6 +331,9 @@ name = "arrow-schema"
 version = "57.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c872d36b7bf2a6a6a2b40de9156265f0242910791db366a2c17476ba8330d68"
+dependencies = [
+ "bitflags",
+]
 
 [[package]]
 name = "arrow-select"
@@ -602,6 +605,16 @@ dependencies = [
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "unicode-width",
+]
+
+[[package]]
+name = "console_log"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86919cef3e37b9356ccf54d4421208c17ecfda01beae61393e7ffd72916c0ef1"
+dependencies = [
+ "log",
+ "web-sys",
 ]
 
 [[package]]
@@ -984,6 +997,7 @@ dependencies = [
  "jobserver",
  "parquet",
  "pmtiles2",
+ "proj4rs",
  "prost",
  "rayon",
  "rayon-core",
@@ -996,6 +1010,8 @@ dependencies = [
 name = "freestiler-python"
 version = "0.3.1-dev.0"
 dependencies = [
+ "arrow-array 57.3.0",
+ "arrow-schema 57.3.0",
  "freestiler-core",
  "geo-types",
  "geozero",
@@ -2019,6 +2035,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proj4rs"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99f88879081958c109556f14db41e2ee45193090030d93bbbbf28819221e4f13"
+dependencies = [
+ "console_log",
+ "js-sys",
+ "thiserror 2.0.18",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

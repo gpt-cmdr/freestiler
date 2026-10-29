@@ -1,5 +1,39 @@
 # freestiler 0.3.0.9000
 
+* Python input can now be any Arrow stream (`__arrow_c_stream__`: a pyarrow
+  Table or RecordBatchReader, `GeoDataFrame.to_arrow()`), passed to
+  `freestile()`, `freestile_layers()` or `freestile_layer()`. The geometry
+  column is WKB or native GeoArrow; it is read through the Arrow C stream
+  interface and reprojected to EPSG:4326 in pure Rust (proj4rs, no PROJ or
+  pyproj), so no GeoPandas, shapely or JSON step is needed. The CRS comes
+  from the GeoArrow extension or GeoParquet `geo` metadata, or
+  `freestile_layer(crs=)`; input with no CRS is refused. PROJJSON is
+  converted only for Transverse Mercator, Lambert Conic Conformal (1SP/2SP),
+  Albers, Mercator, Oblique Stereographic and Lambert Azimuthal Equal Area,
+  on datums whose default PROJ operation to WGS 84 is null (WGS 84, NAD83,
+  NAD83(NSRS2007), NAD83(2011), ETRS89, GDA94, GDA2020, NZGD2000, SIRGAS
+  2000) or with an explicit Helmert BoundCRS; everything else is refused,
+  never guessed. Against pyproj 3.8 / PROJ 9.8 the largest difference over
+  16 US state plane, UTM, Albers and Web Mercator CRSs is 73 nm. On HEC-RAS
+  meshes the archive is byte-identical to the GeoDataFrame path.
+
+* New `buffer` option (Python `freestile(buffer=)`, Rust `TileConfig::buffer`):
+  the clip buffer in pixels of a 256-pixel tile, like tippecanoe `--buffer`.
+  The default stays 5% (12.8 px). Every feature is still kept at every zoom
+  and vertices inside the tile do not move; a smaller buffer only repeats
+  fewer features in neighbouring tiles. With `buffer=5` (tippecanoe's
+  default), gzip level 6 and no IDs, an 87,039-cell HEC-RAS mesh (z10-15)
+  is 9.23 MB against tippecanoe's 9.10 MB (was 10.21 MB).
+
+* MVT doubles that round-trip exactly through f32 (for example values read
+  from float32 columns) are written as MVT floats: 5 bytes instead of 9, with
+  identical decoded values (-2.6% on a HEC-RAS water-surface tileset).
+
+* A short line that Visvalingam-Whyatt pre-simplification reduced to two end
+  points on one pixel was dropped at that zoom. The original line is now
+  used instead, so it stays visible (a nearly closed HEC-RAS breakline
+  vanished at z8).
+
 * New `gzip_level` option (Python `freestile(gzip_level=)`, Rust
   `TileConfig::gzip_level`) sets the gzip level of tile data in the in-memory
   pipeline. The default stays the fast level 1; tile contents never change. On

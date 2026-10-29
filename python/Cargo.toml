@@ -14,9 +14,10 @@ name = "_freestiler"
 crate-type = ["cdylib"]
 
 [features]
-default = ["geoparquet", "duckdb"]
+default = ["geoparquet", "duckdb", "arrow"]
 geoparquet = ["freestiler-core/geoparquet"]
 duckdb = ["freestiler-core/duckdb"]
+arrow = ["freestiler-core/arrow", "dep:arrow-array", "dep:arrow-schema"]
 fastpfor = ["freestiler-core/fastpfor"]
 fsst = ["freestiler-core/fsst"]
 
@@ -26,6 +27,8 @@ freestiler-core = { path = "../src/rust/freestiler-core" }
 
 # Needed directly for WKB parsing and geometry type conversion
 geo-types = "0.7"
+arrow-array = { version = "57", optional = true, features = ["ffi"] }
+arrow-schema = { version = "57", optional = true }
 geozero = { version = "0.13", features = ["with-wkb", "with-geo"] }
 
 [profile.release]

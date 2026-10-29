@@ -144,7 +144,7 @@ pub fn tile_morton_key(geom: &Geometry, west: f64, east: f64, south: f64, north:
 /// Buffer factor as a fraction of tile extent for tile assignment.
 /// Must match the BUFFER_FRACTION in clip.rs so features in the
 /// clip buffer zone are assigned to the tile.
-const ASSIGN_BUFFER_FRACTION: f64 = 0.05;
+const ASSIGN_BUFFER_FRACTION: f64 = crate::clip::DEFAULT_BUFFER_FRACTION;
 
 /// Assign features to tiles using optional geometry overrides for bbox calculation.
 /// When `geom_overrides` is `Some` and `geom_overrides[i]` is `Some(geom)`, uses
@@ -161,16 +161,34 @@ pub fn assign_features_to_tiles_with_geoms(
     drop_mask: Option<&[bool]>,
     zoom: u8,
 ) -> HashMap<TileCoord, Vec<usize>> {
+    assign_features_to_tiles_buffered(
+        features,
+        geom_overrides,
+        drop_mask,
+        zoom,
+        ASSIGN_BUFFER_FRACTION,
+    )
+}
+
+/// [`assign_features_to_tiles_with_geoms`] with an explicit buffer, which
+/// must match the clip buffer (see [`crate::clip::clip_geometry_to_tile_buffered`]).
+pub fn assign_features_to_tiles_buffered(
+    features: &[Feature],
+    geom_overrides: Option<&[Option<Geometry>]>,
+    drop_mask: Option<&[bool]>,
+    zoom: u8,
+    buffer_fraction: f64,
+) -> HashMap<TileCoord, Vec<usize>> {
     let mut tile_map: HashMap<TileCoord, Vec<usize>> = HashMap::new();
     let max_tiles = (1u64 << zoom) as u32;
 
     // Precompute the buffer in degrees of longitude and latitude
     // at this zoom level (one tile's worth × buffer fraction)
     let tile_width_deg = 360.0 / (1u64 << zoom) as f64;
-    let buf_x = tile_width_deg * ASSIGN_BUFFER_FRACTION;
+    let buf_x = tile_width_deg * buffer_fraction;
     // For latitude, use an approximate buffer based on mid-latitude tile height
     // (conservative: use equatorial tile height which is the largest)
-    let buf_y = tile_width_deg * ASSIGN_BUFFER_FRACTION;
+    let buf_y = tile_width_deg * buffer_fraction;
 
     for (idx, feature) in features.iter().enumerate() {
         if let Some(mask) = drop_mask {

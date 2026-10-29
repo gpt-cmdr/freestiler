@@ -42,24 +42,38 @@ class FreestileLayer:
 
     Parameters
     ----------
-    input : GeoDataFrame
-        The geospatial data for this layer.
+    input : GeoDataFrame or Arrow stream
+        The geospatial data for this layer: a GeoDataFrame, or any object
+        with ``__arrow_c_stream__`` (pyarrow Table / RecordBatchReader,
+        ``GeoDataFrame.to_arrow()``) whose geometry column is WKB or native
+        GeoArrow.
     min_zoom : int or None
         Minimum zoom level for this layer. None uses the global default.
     max_zoom : int or None
         Maximum zoom level for this layer. None uses the global default.
+    crs : str, pyproj.CRS or None
+        Arrow input only: the CRS of the geometry column when its metadata
+        does not carry one (PROJJSON, a PROJ string, ``EPSG:4326``, or any
+        object with ``to_json()``). Arrow input with no CRS is refused.
+    geometry_column : str or None
+        Arrow input only: the geometry column name (default: the GeoArrow
+        typed field, else the GeoParquet primary column, else ``geometry``).
     """
 
-    input: gpd.GeoDataFrame
+    input: object
     min_zoom: int | None = None
     max_zoom: int | None = None
+    crs: object = None
+    geometry_column: str | None = None
 
 
 def freestile_layer(
-    input: gpd.GeoDataFrame,
+    input,
     *,
     min_zoom: int | None = None,
     max_zoom: int | None = None,
+    crs=None,
+    geometry_column: str | None = None,
 ) -> FreestileLayer:
     """Create a layer with per-layer zoom control.
 
@@ -76,7 +90,30 @@ def freestile_layer(
     -------
     FreestileLayer
     """
-    return FreestileLayer(input=input, min_zoom=min_zoom, max_zoom=max_zoom)
+    return FreestileLayer(input=input, min_zoom=min_zoom, max_zoom=max_zoom,
+                          crs=crs, geometry_column=geometry_column)
+
+
+def _is_arrow(obj) -> bool:
+    """True for Arrow stream input (but not a GeoDataFrame)."""
+    return hasattr(obj, "__arrow_c_stream__") and not isinstance(obj, gpd.GeoDataFrame)
+
+
+def _crs_text(crs):
+    if crs is None or isinstance(crs, str):
+        return crs
+    if hasattr(crs, "to_json"):
+        return crs.to_json()
+    raise TypeError("crs must be a string or an object with to_json() (pyproj.CRS)")
+
+
+def _check_buffer(buffer):
+    if buffer is None:
+        return None
+    if isinstance(buffer, bool) or not isinstance(buffer, (int, float, np.integer, np.floating)) \
+            or not 0 <= float(buffer) <= 128:
+        raise ValueError("buffer must be a number of pixels from 0 to 128")
+    return float(buffer)
 
 
 def freestile(
@@ -100,6 +137,7 @@ def freestile(
     category_values: list | None = None,
     cluster_min_points: int = 2,
     gzip_level: int | None = None,
+    buffer: float | None = None,
 ) -> Path:
     """Create a PMTiles archive from geospatial data.
 
@@ -155,6 +193,20 @@ def freestile(
         Gzip level 0-9 for tile data. None keeps the fast level 1. Tile
         contents are unchanged; level 6 makes HEC-RAS mesh archives about
         14% smaller at a modest encode cost.
+    buffer : float, optional
+        Clip buffer around each tile in pixels of a 256-pixel tile, like
+        tippecanoe ``--buffer``. None keeps the 5% default (12.8 px). Every
+        feature is still kept at every zoom; a smaller buffer only repeats
+        fewer features in neighbouring tiles. ``buffer=5`` (tippecanoe's
+        default) makes HEC-RAS mesh archives about 10% smaller. Keep it at
+        least half the widest rendered line width.
+
+    Arrow input: ``input`` (or a dict value / ``FreestileLayer.input``) may
+    be any object with ``__arrow_c_stream__``. It is read through the Arrow
+    C stream interface and reprojected to EPSG:4326 in Rust, with no
+    GeoPandas, shapely or pyproj step. Its CRS comes from the GeoArrow
+    extension or GeoParquet ``geo`` metadata, or ``FreestileLayer.crs``;
+    input with no CRS is refused.
 
     Returns
     -------
@@ -207,13 +259,15 @@ def freestile(
         if categorical:
             raise ValueError("gzip_level is not supported with categorical clustering")
         gzip_level = _check_gzip_level(gzip_level)
+    buffer = _check_buffer(buffer)
 
     # Determine default layer_name
-    if layer_name is None and isinstance(input, gpd.GeoDataFrame):
+    single = isinstance(input, (gpd.GeoDataFrame, FreestileLayer)) or _is_arrow(input)
+    if layer_name is None and single:
         layer_name = output.stem
 
     # Normalize to dict of layers
-    if isinstance(input, gpd.GeoDataFrame):
+    if single:
         layers_dict: dict[str, Union[gpd.GeoDataFrame, FreestileLayer]] = {
             layer_name or "default": input
         }
@@ -224,11 +278,19 @@ def freestile(
             "input must be a GeoDataFrame or dict[str, GeoDataFrame | FreestileLayer]"
         )
 
+    has_arrow = any(
+        _is_arrow(v.input if isinstance(v, FreestileLayer) else v)
+        for v in layers_dict.values()
+    )
+    if has_arrow and categorical:
+        raise ValueError("Categorical clustering requires a GeoDataFrame, not Arrow input")
+
     # Count total features
     total_features = 0
     for v in layers_dict.values():
         gdf = v.input if isinstance(v, FreestileLayer) else v
-        total_features += len(gdf)
+        total_features += gdf.num_rows if hasattr(gdf, "num_rows") else (
+            len(gdf) if hasattr(gdf, "__len__") else 0)
 
     if not quiet:
         n_layers = len(layers_dict)
@@ -238,7 +300,7 @@ def freestile(
             f"layer{'s' if n_layers != 1 else ''}..."
         )
 
-    if not categorical and len(layers_dict) > 1:
+    if not categorical and (len(layers_dict) > 1 or has_arrow):
         # One layer in memory at a time; byte-identical to the all-layer path.
         _tile_layered(
             layers_dict.items(), output, tile_format=tile_format,
@@ -246,7 +308,7 @@ def freestile(
             drop_rate=drop_rate, cluster_distance=cluster_distance,
             cluster_maxzoom=cluster_maxzoom, coalesce=coalesce,
             simplification=simplification, generate_ids=generate_ids, quiet=quiet,
-            gzip_level=gzip_level,
+            gzip_level=gzip_level, buffer=buffer,
         )
         if not quiet:
             print(f"Created {output} ({_format_size(output.stat().st_size)})")
@@ -290,6 +352,7 @@ def freestile(
             cluster_maxzoom=cluster_maxzoom if cluster_maxzoom is not None else -1,
             do_coalesce=coalesce,
             gzip_level=gzip_level,
+            buffer=buffer,
         )
 
     if not quiet:
@@ -322,6 +385,7 @@ def freestile_layers(
     overwrite: bool = True,
     quiet: bool = False,
     gzip_level: int | None = None,
+    buffer: float | None = None,
 ) -> Path:
     """Create a multi-layer PMTiles archive holding one layer in memory at a time.
 
@@ -334,9 +398,10 @@ def freestile_layers(
     ----------
     layers : mapping or iterable of (name, source) pairs
         Layer names with their sources, in output order. A source is a
-        GeoDataFrame, a ``FreestileLayer``, a path to a GeoParquet file (read
-        with ``geopandas.read_parquet`` when its turn comes), or a
-        zero-argument callable returning a GeoDataFrame or ``FreestileLayer``.
+        GeoDataFrame, an Arrow stream (``__arrow_c_stream__``, reprojected
+        in Rust; see ``freestile()``), a ``FreestileLayer``, a path to a
+        GeoParquet file (read with ``geopandas.read_parquet`` when its turn
+        comes), or a zero-argument callable returning any of these.
         A generator of pairs keeps even the Python side to one layer at a time.
     output : str or Path
         Output path for the .pmtiles file.
@@ -354,6 +419,7 @@ def freestile_layers(
         raise ValueError(f"tile_format must be 'mlt' or 'mvt', got '{tile_format}'")
     if gzip_level is not None:
         gzip_level = _check_gzip_level(gzip_level)
+    buffer = _check_buffer(buffer)
     output = Path(output).resolve()
     if output.exists() and not overwrite:
         raise FileExistsError(
@@ -366,6 +432,7 @@ def freestile_layers(
         cluster_distance=cluster_distance, cluster_maxzoom=cluster_maxzoom,
         coalesce=coalesce, simplification=simplification,
         generate_ids=generate_ids, quiet=quiet, gzip_level=gzip_level,
+        buffer=buffer,
     )
     if not quiet:
         print(f"Created {output} ({_format_size(output.stat().st_size)})")
@@ -382,7 +449,7 @@ def _check_gzip_level(gzip_level) -> int:
 def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
                   base_zoom, drop_rate, cluster_distance, cluster_maxzoom,
                   coalesce, simplification, generate_ids, quiet,
-                  gzip_level=None) -> None:
+                  gzip_level=None, buffer=None) -> None:
     tiler = _LayeredTiler(
         tile_format, min_zoom, max_zoom,
         base_zoom if base_zoom is not None else -1,
@@ -392,6 +459,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
         cluster_maxzoom if cluster_maxzoom is not None else -1,
         coalesce,
         gzip_level,
+        buffer,
     )
     seen = set()
     for name, source in pairs:
@@ -404,13 +472,26 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
             source = source()
         if isinstance(source, (str, os.PathLike)):
             source = gpd.read_parquet(source)
+        crs = geometry_column = None
         if isinstance(source, FreestileLayer):
             gdf = source.input
             layer_min = source.min_zoom if source.min_zoom is not None else min_zoom
             layer_max = source.max_zoom if source.max_zoom is not None else max_zoom
+            crs, geometry_column = source.crs, source.geometry_column
         else:
             gdf, layer_min, layer_max = source, min_zoom, max_zoom
         source = None
+        if _is_arrow(gdf):
+            report = tiler.add_arrow_layer(
+                name, gdf, layer_min, layer_max,
+                geometry_column=geometry_column, crs=_crs_text(crs),
+            )
+            if not quiet and report.get("reprojection"):
+                print(f"  Reprojected layer '{name}' to WGS84 in Rust")
+            gdf = None
+            continue
+        if crs is not None or geometry_column is not None:
+            raise ValueError("crs and geometry_column apply to Arrow input only")
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
         gdf = None
         tiler.add_layer(layer_data)

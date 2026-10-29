@@ -54,6 +54,7 @@ fn config(gzip_level: Option<u32>) -> TileConfig {
         cluster_maxzoom: None,
         coalesce: false,
         gzip_level,
+        buffer: None,
     }
 }
 
