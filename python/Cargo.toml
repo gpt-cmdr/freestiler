@@ -27,8 +27,8 @@ freestiler-core = { path = "../src/rust/freestiler-core" }
 
 # Needed directly for WKB parsing and geometry type conversion
 geo-types = "0.7"
-arrow-array = { version = "57", optional = true, features = ["ffi"] }
-arrow-schema = { version = "57", optional = true }
+arrow-array = { version = "59", optional = true, features = ["ffi"] }
+arrow-schema = { version = "59", optional = true }
 geozero = { version = "0.13", features = ["with-wkb", "with-geo"] }
 
 [profile.release]

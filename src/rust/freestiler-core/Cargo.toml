@@ -55,10 +55,10 @@ rayon-core = "=1.12.1"
 jobserver = "=0.1.32"
 
 # GeoParquet file input (optional)
-parquet = { version = "57", optional = true, default-features = false, features = ["arrow", "snap"] }
-arrow-array = { version = "57", optional = true }
-arrow-schema = { version = "57", optional = true }
-arrow-cast = { version = "57", optional = true }
+parquet = { version = "59", optional = true, default-features = false, features = ["arrow", "snap"] }
+arrow-array = { version = "59", optional = true }
+arrow-schema = { version = "59", optional = true }
+arrow-cast = { version = "59", optional = true }
 
 # WKB geometry parsing (shared by geoparquet and duckdb features)
 geozero = { version = "0.13", optional = true, features = ["with-wkb", "with-geo"] }
