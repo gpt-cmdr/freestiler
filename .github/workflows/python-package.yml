@@ -41,7 +41,7 @@ jobs:
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test buffer
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test line_collapse
       - name: Test Arrow input and pure-Rust reprojection
-        run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --features arrow --lib -- crs:: arrow_input:: mvt::
+        run: "cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --features arrow --lib -- crs:: arrow_input:: mvt::"
 
   build-wheels:
     name: Build Wheel (${{ matrix.os }}, py${{ matrix.python-version }})
