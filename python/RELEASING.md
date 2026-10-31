@@ -67,3 +67,21 @@ python -m twine upload dist/*
 ```
 
 For the manual fallback, use a PyPI API token rather than a password.
+
+## gpt-cmdr fork releases
+
+The `gpt-cmdr/freestiler` fork never publishes to PyPI or crates.io: the
+`freestiler` name belongs to upstream. Fork builds carry the upstream base
+version plus a fourth component (`0.3.0.01`, which PEP 440 normalizes to
+`0.3.0.1`; `python/Cargo.toml` records it as `0.3.0+gpt-cmdr.1`) and are
+published only as GitHub Release assets on the fork.
+
+1. Set the version in `python/pyproject.toml` and `python/Cargo.toml`
+   (and the `freestiler-python` entry in `python/Cargo.lock`).
+2. Tag `vX.Y.Z.N-gpt-cmdr`. Never push a `python-v*` tag on the fork: that
+   prefix triggers the PyPI publish job.
+3. Run the **Python Package** workflow manually on the tag
+   (`gh workflow run python-package.yml -R gpt-cmdr/freestiler --ref <tag>`);
+   the publish job is skipped because the ref is not `python-v*`.
+4. Download the wheel and sdist artifacts, write `SHA256SUMS`, and attach them
+   to a GitHub Release for the tag.
