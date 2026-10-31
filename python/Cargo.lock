@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "freestiler-python"
-version = "0.3.1-dev.0"
+version = "0.3.0+gpt-cmdr.1"
 dependencies = [
  "arrow-array 59.3.2",
  "arrow-schema 59.3.2",
