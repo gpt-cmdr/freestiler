@@ -15,6 +15,7 @@ def _freestile(
     cluster_maxzoom: int,
     do_coalesce: bool,
     gzip_level: int | None = None,
+    buffer: float | None = None,
 ) -> str: ...
 
 def _freestile_file(
@@ -83,6 +84,16 @@ class _LayeredTiler:
         cluster_maxzoom: int,
         do_coalesce: bool,
         gzip_level: int | None = None,
+        buffer: float | None = None,
     ) -> None: ...
     def add_layer(self, layer: dict) -> int: ...
+    def add_arrow_layer(
+        self,
+        name: str,
+        source: object,
+        min_zoom: int,
+        max_zoom: int,
+        geometry_column: str | None = None,
+        crs: str | None = None,
+    ) -> dict: ...
     def finish(self, output_path: str) -> str: ...

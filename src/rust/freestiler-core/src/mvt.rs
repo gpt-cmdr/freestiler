@@ -378,6 +378,13 @@ fn property_to_value(prop: &PropertyValue) -> Value {
             int_value: Some(*i),
             ..Default::default()
         },
+        // A double that round-trips exactly through f32 (every value read
+        // from a float32 column, such as HEC-RAS results) is written as an
+        // MVT float: 5 bytes instead of 9, and decoders return the same number.
+        PropertyValue::Double(d) if (*d as f32) as f64 == *d => Value {
+            float_value: Some(*d as f32),
+            ..Default::default()
+        },
         PropertyValue::Double(d) => Value {
             double_value: Some(*d),
             ..Default::default()
@@ -436,6 +443,19 @@ mod tests {
             }
         }
         lines
+    }
+
+    #[test]
+    fn float32_exact_doubles_are_written_as_floats() {
+        let exact = property_to_value(&PropertyValue::Double(647.554_626_464_843_8));
+        assert_eq!(exact.float_value, Some(647.554_626_464_843_8_f64 as f32));
+        assert_eq!(exact.double_value, None);
+        assert_eq!(exact.float_value.unwrap() as f64, 647.554_626_464_843_8);
+        let wide = property_to_value(&PropertyValue::Double(0.1));
+        assert_eq!(wide.double_value, Some(0.1));
+        assert_eq!(wide.float_value, None);
+        let int_like = property_to_value(&PropertyValue::Double(3.0));
+        assert_eq!(int_like.float_value, Some(3.0));
     }
 
     #[test]

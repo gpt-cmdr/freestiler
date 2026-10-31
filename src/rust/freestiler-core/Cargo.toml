@@ -16,6 +16,10 @@ geoparquet = ["dep:parquet", "dep:arrow-array", "dep:arrow-schema", "dep:arrow-c
 duckdb = ["dep:duckdb", "dep:geozero"]
 fastpfor = ["dep:fastpfor"]
 fsst = ["dep:fsst-rs"]
+# Pure-Rust reprojection to EPSG:4326 (proj4rs; no PROJ/C dependency)
+reproject = ["dep:proj4rs"]
+# Arrow / GeoArrow record batch input (Arrow C stream interface), reprojected
+arrow = ["geoparquet", "reproject", "arrow-array/ffi"]
 
 [dependencies]
 # Geometry operations
@@ -51,16 +55,19 @@ rayon-core = "=1.12.1"
 jobserver = "=0.1.32"
 
 # GeoParquet file input (optional)
-parquet = { version = "57", optional = true, default-features = false, features = ["arrow", "snap"] }
-arrow-array = { version = "57", optional = true }
-arrow-schema = { version = "57", optional = true }
-arrow-cast = { version = "57", optional = true }
+parquet = { version = "59", optional = true, default-features = false, features = ["arrow", "snap"] }
+arrow-array = { version = "59", optional = true }
+arrow-schema = { version = "59", optional = true }
+arrow-cast = { version = "59", optional = true }
 
 # WKB geometry parsing (shared by geoparquet and duckdb features)
 geozero = { version = "0.13", optional = true, features = ["with-wkb", "with-geo"] }
 
 # DuckDB file input (optional)
 duckdb = { version = "1.2", optional = true, features = ["bundled"] }
+
+# Reprojection (optional). 0.1.8 is the newest edition-2021 release.
+proj4rs = { version = "=0.1.8", optional = true, default-features = false }
 
 # Advanced MLT encodings (optional)
 fastpfor = { version = "0.7", optional = true }

@@ -4,16 +4,27 @@ use geo_types::{
 
 use crate::tiler::{tile_bounds, Geometry, TileCoord};
 
-/// Buffer factor as a fraction of tile extent (5% on each side)
-const BUFFER_FRACTION: f64 = 0.05;
+/// Default buffer as a fraction of tile extent (5% on each side, 204.8 of
+/// 4096 tile units; tippecanoe's default `-b 5` is 5/256 = 1.95%).
+pub const DEFAULT_BUFFER_FRACTION: f64 = 0.05;
 
-/// Clip a geometry to tile boundaries with a small buffer
+/// Clip a geometry to tile boundaries with the default buffer.
 pub fn clip_geometry_to_tile(geom: &Geometry, coord: &TileCoord) -> Option<Geometry> {
+    clip_geometry_to_tile_buffered(geom, coord, DEFAULT_BUFFER_FRACTION)
+}
+
+/// Clip a geometry to tile boundaries extended by `buffer_fraction` of the
+/// tile size on each side.
+pub fn clip_geometry_to_tile_buffered(
+    geom: &Geometry,
+    coord: &TileCoord,
+    buffer_fraction: f64,
+) -> Option<Geometry> {
     let bounds = tile_bounds(coord);
 
     // Add a small buffer to avoid edge artifacts
-    let dx = (bounds.max().x - bounds.min().x) * BUFFER_FRACTION;
-    let dy = (bounds.max().y - bounds.min().y) * BUFFER_FRACTION;
+    let dx = (bounds.max().x - bounds.min().x) * buffer_fraction;
+    let dy = (bounds.max().y - bounds.min().y) * buffer_fraction;
     let buffered = Rect::new(
         Coord {
             x: bounds.min().x - dx,

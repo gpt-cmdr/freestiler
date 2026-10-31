@@ -23,6 +23,24 @@ pub struct TileConfig {
     /// level only shrinks the archive (about 14% at level 6 on HEC-RAS mesh
     /// tiles) at some encode time.
     pub gzip_level: Option<u32>,
+    /// Clip buffer around each tile in pixels of a 256-pixel tile, as
+    /// tippecanoe's `--buffer`. `None` keeps freestiler's 5% (12.8 px).
+    /// Features are assigned to, and clipped at, the buffered tile edge, so
+    /// a smaller buffer repeats fewer features in neighbouring tiles; it does
+    /// not drop any feature or move any vertex inside the tile. tippecanoe's
+    /// default is 5, which on HEC-RAS meshes removes about 10% of the
+    /// encoded features. Lines and outlines need a buffer of at least half
+    /// their rendered width in tile pixels.
+    pub buffer: Option<f64>,
+}
+
+impl TileConfig {
+    /// The clip buffer as a fraction of the tile size.
+    pub fn buffer_fraction(&self) -> f64 {
+        self.buffer
+            .map(|px| px / 256.0)
+            .unwrap_or(clip::DEFAULT_BUFFER_FRACTION)
+    }
 }
 
 /// Progress reporting trait for binding-specific output
@@ -158,6 +176,7 @@ fn generate_tiles_into(
         .collect();
 
     let do_simplify = config.simplification;
+    let buffer_fraction = config.buffer_fraction();
     let do_coalesce = config.coalesce;
     let format = config.tile_format;
 
@@ -262,11 +281,12 @@ fn generate_tiles_into(
             };
 
             // Assign features to tiles; dropped features never enter the map
-            let tile_map = tiler::assign_features_to_tiles_with_geoms(
+            let tile_map = tiler::assign_features_to_tiles_buffered(
                 features,
                 simplified_geoms.as_deref(),
                 drop_mask.as_deref(),
                 zoom,
+                buffer_fraction,
             );
 
             active_layers.push(ActiveLayer {
@@ -320,16 +340,39 @@ fn generate_tiles_into(
                                     let feature = &al.features[idx];
                                     let geom_to_process = al.geom_for(idx);
 
-                                    // Clip to tile boundaries
-                                    let clipped =
-                                        clip::clip_geometry_to_tile(geom_to_process, &coord)?;
-
-                                    // Snap to tile pixel grid
-                                    let geometry = if do_simplify {
-                                        simplify::simplify_geometry(&clipped, &coord)
-                                    } else {
-                                        clipped
+                                    // Clip to tile boundaries, then snap to
+                                    // the tile pixel grid
+                                    let process = |g: &Geometry| {
+                                        let clipped = clip::clip_geometry_to_tile_buffered(
+                                            g,
+                                            &coord,
+                                            buffer_fraction,
+                                        )?;
+                                        Some(if do_simplify {
+                                            simplify::simplify_geometry(&clipped, &coord)
+                                        } else {
+                                            clipped
+                                        })
                                     };
+                                    let mut geometry = process(geom_to_process);
+
+                                    // Visvalingam-Whyatt can reduce a short,
+                                    // nearly closed line to its two end points,
+                                    // which then share a pixel and the line
+                                    // vanishes at this zoom. Fall back to the
+                                    // original line rather than drop it.
+                                    let presimplified =
+                                        !std::ptr::eq(geom_to_process, &feature.geometry);
+                                    if presimplified
+                                        && geometry
+                                            .as_ref()
+                                            .map_or(true, |g| simplify::line_collapses(g, &coord))
+                                    {
+                                        if let Some(original) = process(&feature.geometry) {
+                                            geometry = Some(original);
+                                        }
+                                    }
+                                    let geometry = geometry?;
 
                                     Some(Feature {
                                         id: feature.id,
@@ -441,10 +484,17 @@ fn layer_meta(l: &LayerData, clustered: bool) -> pmtiles_writer::LayerMeta {
     }
 }
 
-/// Refuse a gzip level outside 0-9 before any output is produced.
+/// Refuse a gzip level outside 0-9 or a buffer outside 0-128 pixels before
+/// any output is produced.
 fn validate_gzip_level(config: &TileConfig) -> Result<(), String> {
     if config.gzip_level.is_some_and(|level| level > 9) {
         return Err("gzip_level must be between 0 and 9".to_string());
+    }
+    if config
+        .buffer
+        .is_some_and(|b| !b.is_finite() || !(0.0..=128.0).contains(&b))
+    {
+        return Err("buffer must be between 0 and 128 pixels".to_string());
     }
     Ok(())
 }
