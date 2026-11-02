@@ -773,6 +773,7 @@ mod tests {
         let layer = LayerData {
             name: "plants".into(), features: s.features, prop_names: s.names,
             prop_types: s.types, min_zoom: 0, max_zoom: 3,
+            polygon_simplify: None,
         };
         let dir = Scratch::new().unwrap();
         for generate_ids in [true, false] {

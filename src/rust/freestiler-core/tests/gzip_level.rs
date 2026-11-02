@@ -39,6 +39,7 @@ fn mesh() -> LayerData {
         prop_types: vec!["integer".into(), "double".into()],
         min_zoom: 8,
         max_zoom: 14,
+        polygon_simplify: None,
     }
 }
 

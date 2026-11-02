@@ -35,6 +35,7 @@ fn nearly_closed_line_survives_every_zoom() {
         prop_types: vec![],
         min_zoom: 4,
         max_zoom: 14,
+        polygon_simplify: None,
     };
     let config = TileConfig {
         tile_format: TileFormat::Mvt,

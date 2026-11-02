@@ -1,5 +1,18 @@
 # freestiler 0.3.0.9000
 
+* New per-layer `polygon_simplify` option (Python
+  `freestile_layer(polygon_simplify=)` / `FreestileLayer`, Rust
+  `LayerData::polygon_simplify`, off by default): a Douglas-Peucker tolerance
+  in tile pixels. An opted-in layer's polygons are simplified once per zoom
+  and cut down a tile tree instead of being clipped whole, per tile, in every
+  tile of their bounding box. Tiling a single very large polygon drops from
+  minutes to seconds (see the release notes for measurements). The layer's
+  maximum zoom keeps every input vertex and no feature is dropped; a ring never
+  falls below three vertices and a collapsed polygon stays as a one-pixel
+  square. Do not use it on a mesh: polygons are simplified independently, so
+  edges shared between them stop being coincident. Output without the option
+  is unchanged.
+
 * Python input can now be any Arrow stream (`__arrow_c_stream__`: a pyarrow
   Table or RecordBatchReader, `GeoDataFrame.to_arrow()`), passed to
   `freestile()`, `freestile_layers()` or `freestile_layer()`. The geometry

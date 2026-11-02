@@ -432,6 +432,7 @@ impl CategorySchema {
             prop_types: types,
             min_zoom: zoom,
             max_zoom: zoom,
+            polygon_simplify: None,
         })
     }
 }
