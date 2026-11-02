@@ -40,6 +40,10 @@ pub struct LayerData {
     pub prop_types: Vec<String>,
     pub min_zoom: u8,
     pub max_zoom: u8,
+    /// Per-zoom polygon simplification for this layer, as a tolerance in tile
+    /// pixels (1/4096 of a tile side); `None` keeps the default polygon path.
+    /// See [`crate::polygon_zoom`]. Not for a mesh, whose cells share edges.
+    pub polygon_simplify: Option<f64>,
 }
 
 /// A tile coordinate

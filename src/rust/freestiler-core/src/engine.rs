@@ -5,7 +5,9 @@ use std::time::Instant;
 
 use crate::pmtiles_writer::{TileFormat, TileSpool};
 use crate::tiler::{Feature, Geometry, LayerData, TileCoord};
-use crate::{clip, cluster, coalesce, drop, mlt, mvt, pmtiles_writer, simplify, tiler};
+use crate::{
+    clip, cluster, coalesce, drop, mlt, mvt, pmtiles_writer, polygon_zoom, simplify, tiler,
+};
 
 /// Configuration for tile generation
 pub struct TileConfig {
@@ -194,6 +196,19 @@ fn generate_tiles_into(
         })
         .collect();
 
+    // Rank the polygons of opted-in layers once, for every zoom to use.
+    let prepared_polygons: Vec<Option<Vec<Option<polygon_zoom::PreparedPolygon>>>> = layers
+        .iter()
+        .map(|l| {
+            l.polygon_simplify.map(|_| {
+                l.features
+                    .par_iter()
+                    .map(polygon_zoom::prepare_feature)
+                    .collect()
+            })
+        })
+        .collect();
+
     // --- Main tile generation loop ---
     let mut total_tiles: u64 = 0;
     let total_start = Instant::now();
@@ -209,6 +224,9 @@ fn generate_tiles_into(
             prop_names: &'a [String],
             tile_map: HashMap<TileCoord, Vec<usize>>,
             simplified_geoms: Option<Vec<Option<Geometry>>>,
+            /// Pieces already simplified and clipped for this zoom, per tile
+            /// (layers with `polygon_simplify`).
+            polygon_pieces: HashMap<TileCoord, Vec<(usize, Geometry)>>,
         }
 
         impl ActiveLayer<'_> {
@@ -280,11 +298,42 @@ fn generate_tiles_into(
                 None
             };
 
+            // Opted-in polygons are simplified and cut here, and leave the
+            // per-tile clipping below to the layer's other features.
+            let mut polygon_pieces = HashMap::new();
+            let mut assign_mask = None;
+            if let (Some(tolerance), Some(prepared)) = (
+                layer.polygon_simplify,
+                prepared_polygons[li].as_deref().filter(|_| !using_clusters),
+            ) {
+                let zoom_polygons = polygon_zoom::tile_zoom(
+                    prepared,
+                    drop_mask.as_deref(),
+                    zoom,
+                    (zoom < layer.max_zoom).then_some(tolerance),
+                    buffer_fraction,
+                );
+                reporter.report(&format!(
+                    "  Zoom {:>2}/{}: layer '{}' keeps {} polygon vertices",
+                    zoom, max_z, layer.name, zoom_polygons.vertices
+                ));
+                polygon_pieces = zoom_polygons.tiles;
+                assign_mask = Some(
+                    prepared
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            p.is_none() && drop_mask.as_ref().map_or(true, |mask| mask[i])
+                        })
+                        .collect::<Vec<bool>>(),
+                );
+            }
+
             // Assign features to tiles; dropped features never enter the map
             let tile_map = tiler::assign_features_to_tiles_buffered(
                 features,
                 simplified_geoms.as_deref(),
-                drop_mask.as_deref(),
+                assign_mask.as_deref().or(drop_mask.as_deref()),
                 zoom,
                 buffer_fraction,
             );
@@ -295,13 +344,14 @@ fn generate_tiles_into(
                 prop_names,
                 tile_map,
                 simplified_geoms,
+                polygon_pieces,
             });
         }
 
         // Collect all tile coords across all active layers
         let mut all_coords: HashSet<TileCoord> = HashSet::new();
         for al in &active_layers {
-            for coord in al.tile_map.keys() {
+            for coord in al.tile_map.keys().chain(al.polygon_pieces.keys()) {
                 all_coords.insert(*coord);
             }
         }
@@ -333,9 +383,12 @@ fn generate_tiles_into(
                     for al in &active_layers {
                         let layer = &layers[al.layer_idx];
 
-                        if let Some(feature_indices) = al.tile_map.get(&coord) {
+                        let feature_indices = al.tile_map.get(&coord);
+                        let polygon_pieces = al.polygon_pieces.get(&coord);
+                        if feature_indices.is_some() || polygon_pieces.is_some() {
                             let mut tile_feats: Vec<Feature> = feature_indices
-                                .iter()
+                                .into_iter()
+                                .flatten()
                                 .filter_map(|&idx| {
                                     let feature = &al.features[idx];
                                     let geom_to_process = al.geom_for(idx);
@@ -381,6 +434,19 @@ fn generate_tiles_into(
                                     })
                                 })
                                 .collect();
+
+                            for (idx, piece) in polygon_pieces.into_iter().flatten() {
+                                let feature = &al.features[*idx];
+                                tile_feats.push(Feature {
+                                    id: feature.id,
+                                    geometry: if do_simplify {
+                                        simplify::simplify_geometry(piece, &coord)
+                                    } else {
+                                        piece.clone()
+                                    },
+                                    properties: feature.properties.clone(),
+                                });
+                            }
 
                             // Sort features spatially (Morton curve) for better compression
                             if tile_feats.len() > 1 {
@@ -484,6 +550,18 @@ fn layer_meta(l: &LayerData, clustered: bool) -> pmtiles_writer::LayerMeta {
     }
 }
 
+/// Refuse a polygon tolerance out of range before any output is produced.
+fn validate_layer(layer: &LayerData) -> Result<(), String> {
+    match layer.polygon_simplify {
+        Some(tolerance) if !polygon_zoom::valid_tolerance(tolerance) => Err(format!(
+            "layer '{}': polygon_simplify must be above 0 and at most {} tile pixels",
+            layer.name,
+            polygon_zoom::MAX_TOLERANCE_PX
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Refuse a gzip level outside 0-9 or a buffer outside 0-128 pixels before
 /// any output is produced.
 fn validate_gzip_level(config: &TileConfig) -> Result<(), String> {
@@ -507,6 +585,7 @@ pub fn generate_pmtiles(
     reporter: &dyn ProgressReporter,
 ) -> Result<(), String> {
     validate_gzip_level(config)?;
+    layers.iter().try_for_each(validate_layer)?;
     let bounds = compute_all_bounds(layers);
 
     // Build layer metadata for PMTiles
@@ -607,6 +686,7 @@ impl LayeredTiler {
         layer: LayerData,
         reporter: &dyn ProgressReporter,
     ) -> Result<(), String> {
+        validate_layer(&layer)?;
         let use_cluster = self.config.cluster_distance.map_or(false, |d| d > 0.0);
         let is_point = !layer.features.is_empty()
             && layer

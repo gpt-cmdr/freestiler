@@ -267,6 +267,7 @@ where
             prop_types,
             min_zoom: opts.min_zoom,
             max_zoom: opts.max_zoom,
+            polygon_simplify: None,
         },
         report,
     ))

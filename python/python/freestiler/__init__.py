@@ -58,6 +58,16 @@ class FreestileLayer:
     geometry_column : str or None
         Arrow input only: the geometry column name (default: the GeoArrow
         typed field, else the GeoParquet primary column, else ``geometry``).
+    polygon_simplify : float or None
+        Simplify this layer's polygons per zoom, tippecanoe-style, with this
+        Douglas-Peucker tolerance in tile pixels (1/4096 of a tile side), and
+        clip them down a tile tree. ``1.0`` is about one tile pixel of error
+        at every zoom; the layer's maximum zoom keeps every input vertex.
+        This is what makes a single very large polygon cheap: tiling it no
+        longer costs (its vertices x the tiles in its bounding box). No
+        feature is dropped. None (the default) keeps the regular path, whose
+        output is unchanged. Do not set it on a mesh: polygons are simplified
+        independently, so edges shared between them stop being coincident.
     """
 
     input: object
@@ -65,6 +75,7 @@ class FreestileLayer:
     max_zoom: int | None = None
     crs: object = None
     geometry_column: str | None = None
+    polygon_simplify: float | None = None
 
 
 def freestile_layer(
@@ -74,6 +85,7 @@ def freestile_layer(
     max_zoom: int | None = None,
     crs=None,
     geometry_column: str | None = None,
+    polygon_simplify: float | None = None,
 ) -> FreestileLayer:
     """Create a layer with per-layer zoom control.
 
@@ -85,13 +97,17 @@ def freestile_layer(
         Minimum zoom level for this layer. None uses the global default.
     max_zoom : int, optional
         Maximum zoom level for this layer. None uses the global default.
+    polygon_simplify : float, optional
+        Per-zoom polygon simplification tolerance in tile pixels; see
+        ``FreestileLayer``. None keeps the regular polygon path.
 
     Returns
     -------
     FreestileLayer
     """
     return FreestileLayer(input=input, min_zoom=min_zoom, max_zoom=max_zoom,
-                          crs=crs, geometry_column=geometry_column)
+                          crs=crs, geometry_column=geometry_column,
+                          polygon_simplify=polygon_simplify)
 
 
 def _is_arrow(obj) -> bool:
@@ -317,15 +333,20 @@ def freestile(
     # Preprocess each layer
     rust_layers = []
     for name, value in layers_dict.items():
+        polygon_simplify = None
         if isinstance(value, FreestileLayer):
             gdf = value.input
             layer_min = value.min_zoom if value.min_zoom is not None else min_zoom
             layer_max = value.max_zoom if value.max_zoom is not None else max_zoom
+            polygon_simplify = _check_polygon_simplify(value.polygon_simplify)
+            if polygon_simplify is not None and categorical:
+                raise ValueError("polygon_simplify is not supported with categorical clustering")
         else:
             gdf = value
             layer_min = min_zoom
             layer_max = max_zoom
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
+        layer_data["polygon_simplify"] = polygon_simplify
         rust_layers.append(layer_data)
 
     # Call Rust
@@ -439,6 +460,15 @@ def freestile_layers(
     return output
 
 
+def _check_polygon_simplify(tolerance):
+    if tolerance is None:
+        return None
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float, np.integer, np.floating)) \
+            or not 0 < float(tolerance) <= 64:
+        raise ValueError("polygon_simplify must be a number of tile pixels above 0 and at most 64")
+    return float(tolerance)
+
+
 def _check_gzip_level(gzip_level) -> int:
     if isinstance(gzip_level, bool) or not isinstance(gzip_level, (int, np.integer)) \
             or not 0 <= gzip_level <= 9:
@@ -472,12 +502,13 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
             source = source()
         if isinstance(source, (str, os.PathLike)):
             source = gpd.read_parquet(source)
-        crs = geometry_column = None
+        crs = geometry_column = polygon_simplify = None
         if isinstance(source, FreestileLayer):
             gdf = source.input
             layer_min = source.min_zoom if source.min_zoom is not None else min_zoom
             layer_max = source.max_zoom if source.max_zoom is not None else max_zoom
             crs, geometry_column = source.crs, source.geometry_column
+            polygon_simplify = _check_polygon_simplify(source.polygon_simplify)
         else:
             gdf, layer_min, layer_max = source, min_zoom, max_zoom
         source = None
@@ -485,6 +516,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
             report = tiler.add_arrow_layer(
                 name, gdf, layer_min, layer_max,
                 geometry_column=geometry_column, crs=_crs_text(crs),
+                polygon_simplify=polygon_simplify,
             )
             if not quiet and report.get("reprojection"):
                 print(f"  Reprojected layer '{name}' to WGS84 in Rust")
@@ -493,6 +525,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
         if crs is not None or geometry_column is not None:
             raise ValueError("crs and geometry_column apply to Arrow input only")
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
+        layer_data["polygon_simplify"] = polygon_simplify
         gdf = None
         tiler.add_layer(layer_data)
         layer_data = None

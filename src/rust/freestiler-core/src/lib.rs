@@ -14,6 +14,7 @@ pub mod file_input;
 pub mod mlt;
 pub mod mvt;
 pub mod pmtiles_writer;
+pub mod polygon_zoom;
 pub mod quantize;
 pub mod simplify;
 pub mod supercluster;

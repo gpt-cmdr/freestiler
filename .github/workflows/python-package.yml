@@ -40,6 +40,10 @@ jobs:
         run: |
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test buffer
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test line_collapse
+      - name: Test per-zoom polygon simplification
+        run: |
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test polygon_zoom
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --lib -- polygon_zoom::
       - name: Test Arrow input and pure-Rust reprojection
         run: "cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --features arrow --lib -- crs:: arrow_input:: mvt::"
 
@@ -50,32 +54,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned to ubuntu-24.04: ubuntu-latest now resolves to Ubuntu 26.04,
+          # where actions/setup-python has no Python 3.9. The wheels are built
+          # inside the manylinux container, so the host version does not matter.
+          - os: ubuntu-24.04
             python-version: "3.9"
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
             interpreter: "/opt/python/cp39-cp39/bin/python"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.10"
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
             interpreter: "/opt/python/cp310-cp310/bin/python"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.11"
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
             interpreter: "/opt/python/cp311-cp311/bin/python"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.12"
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
             interpreter: "/opt/python/cp312-cp312/bin/python"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.13"
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
             interpreter: "/opt/python/cp313-cp313/bin/python"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: "3.14"
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
