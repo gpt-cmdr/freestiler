@@ -142,7 +142,15 @@ fn absent_lines<'a>(
     buffer_fraction: f64,
     do_simplify: bool,
 ) -> Vec<(usize, TileCoord, Geometry)> {
-    let found: Vec<AtomicBool> = features.iter().map(|_| AtomicBool::new(false)).collect();
+    let found: Vec<AtomicBool> = (0..features.len())
+        .into_par_iter()
+        .map(|idx| {
+            AtomicBool::new(
+                line_at(idx)
+                    .is_some_and(|g| short_lines::written_in_home_tile(g, zoom, buffer_fraction)),
+            )
+        })
+        .collect();
     tile_map.par_iter().for_each(|(coord, indices)| {
         for &idx in indices {
             if found[idx].load(Ordering::Relaxed) {

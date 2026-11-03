@@ -28,6 +28,8 @@
 
 use geo_types::{Coord, LineString};
 
+use crate::clip::buffered_tile_bounds;
+use crate::simplify::line_collapses;
 use crate::tiler::{lat_to_tile_y, lon_to_tile_x, tile_bounds, Geometry, TileCoord};
 
 /// Tile coordinate extent (pixels per tile side)
@@ -50,6 +52,29 @@ fn on_the_map(c: &Coord<f64>) -> bool {
         && c.y.is_finite()
         && (-180.0..=180.0).contains(&c.x)
         && (-MAX_LATITUDE..=MAX_LATITUDE).contains(&c.y)
+}
+
+/// True when a single line is certainly written at this zoom, found without
+/// clipping or allocating. A line inside the clip rectangle of the tile holding
+/// its first vertex passes the clip with all its vertices, in that tile, so its
+/// pixels there are the ones this looks at. `false` says nothing: most lines
+/// are settled here, and the rest take the tile loop's own clip and snap.
+pub fn written_in_home_tile(geom: &Geometry, zoom: u8, buffer_fraction: f64) -> bool {
+    let Geometry::LineString(ls) = geom else {
+        return false;
+    };
+    let Some(first) = ls.0.first().filter(|c| on_the_map(c)) else {
+        return false;
+    };
+    let coord = TileCoord {
+        z: zoom,
+        x: lon_to_tile_x(first.x, zoom),
+        y: lat_to_tile_y(first.y, zoom),
+    };
+    let rect = buffered_tile_bounds(&coord, buffer_fraction);
+    ls.0.iter().all(|c| {
+        c.x >= rect.min().x && c.x <= rect.max().x && c.y >= rect.min().y && c.y <= rect.max().y
+    }) && !line_collapses(geom, &coord)
 }
 
 /// The minimal form of a line feature at a zoom: its home tile and a

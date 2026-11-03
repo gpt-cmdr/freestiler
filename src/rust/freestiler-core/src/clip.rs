@@ -13,19 +13,15 @@ pub fn clip_geometry_to_tile(geom: &Geometry, coord: &TileCoord) -> Option<Geome
     clip_geometry_to_tile_buffered(geom, coord, DEFAULT_BUFFER_FRACTION)
 }
 
-/// Clip a geometry to tile boundaries extended by `buffer_fraction` of the
-/// tile size on each side.
-pub fn clip_geometry_to_tile_buffered(
-    geom: &Geometry,
-    coord: &TileCoord,
-    buffer_fraction: f64,
-) -> Option<Geometry> {
+/// A tile's bounds extended by `buffer_fraction` of the tile size on each
+/// side: the rectangle geometries are clipped to.
+pub fn buffered_tile_bounds(coord: &TileCoord, buffer_fraction: f64) -> Rect<f64> {
     let bounds = tile_bounds(coord);
 
     // Add a small buffer to avoid edge artifacts
     let dx = (bounds.max().x - bounds.min().x) * buffer_fraction;
     let dy = (bounds.max().y - bounds.min().y) * buffer_fraction;
-    let buffered = Rect::new(
+    Rect::new(
         Coord {
             x: bounds.min().x - dx,
             y: bounds.min().y - dy,
@@ -34,7 +30,17 @@ pub fn clip_geometry_to_tile_buffered(
             x: bounds.max().x + dx,
             y: bounds.max().y + dy,
         },
-    );
+    )
+}
+
+/// Clip a geometry to tile boundaries extended by `buffer_fraction` of the
+/// tile size on each side.
+pub fn clip_geometry_to_tile_buffered(
+    geom: &Geometry,
+    coord: &TileCoord,
+    buffer_fraction: f64,
+) -> Option<Geometry> {
+    let buffered = buffered_tile_bounds(coord, buffer_fraction);
 
     match geom {
         Geometry::Point(p) => {
