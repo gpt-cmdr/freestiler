@@ -112,6 +112,7 @@ fn layer(tolerance: Option<f64>) -> LayerData {
         min_zoom: 0,
         max_zoom: MAX_ZOOM,
         polygon_simplify: tolerance,
+        keep_short_lines: false,
     }
 }
 
@@ -285,6 +286,7 @@ fn a_tile_inside_a_hole_stays_empty() {
         min_zoom: 13,
         max_zoom: 13,
         polygon_simplify: Some(1.0),
+        keep_short_lines: false,
     };
     let mut config = config(TileFormat::Mvt);
     config.min_zoom = 13;
@@ -344,6 +346,7 @@ fn layers_without_polygons_are_unchanged_by_the_option() {
         min_zoom: 0,
         max_zoom: 12,
         polygon_simplify: tolerance,
+        keep_short_lines: false,
     };
     let (a, b) = (scratch.file("off.pmtiles"), scratch.file("on.pmtiles"));
     let mut config = config(TileFormat::Mvt);
@@ -383,6 +386,7 @@ fn only_the_opted_in_layer_changes() {
         min_zoom: 10,
         max_zoom: MAX_ZOOM,
         polygon_simplify: None,
+        keep_short_lines: false,
     };
     let (a, b) = (scratch.file("alone.pmtiles"), scratch.file("with.pmtiles"));
     let cfg = config(TileFormat::Mvt);

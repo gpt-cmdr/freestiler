@@ -263,6 +263,7 @@ fn parse_layers_from_r(layers: &List, generate_ids: bool) -> Vec<LayerData> {
             min_zoom: layer_min_zoom,
             max_zoom: layer_max_zoom,
             polygon_simplify: None,
+            keep_short_lines: false,
         });
     }
 

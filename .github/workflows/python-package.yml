@@ -36,10 +36,12 @@ jobs:
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test gzip_level
       - name: Test layered multi-layer tiling against the in-memory engine
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test layered
-      - name: Test the tile buffer and collapsed-line fallback
+      - name: Test the tile buffer, collapsed-line fallback and keep_short_lines
         run: |
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test buffer
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test line_collapse
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test short_lines
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --lib -- short_lines::
       - name: Test per-zoom polygon simplification
         run: |
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test polygon_zoom

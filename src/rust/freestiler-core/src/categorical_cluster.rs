@@ -433,6 +433,7 @@ impl CategorySchema {
             min_zoom: zoom,
             max_zoom: zoom,
             polygon_simplify: None,
+            keep_short_lines: false,
         })
     }
 }

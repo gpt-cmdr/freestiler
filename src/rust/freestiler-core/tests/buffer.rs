@@ -43,6 +43,7 @@ fn mesh() -> LayerData {
         min_zoom: 9,
         max_zoom: 15,
         polygon_simplify: None,
+        keep_short_lines: false,
     }
 }
 

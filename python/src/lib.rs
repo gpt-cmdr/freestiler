@@ -228,6 +228,10 @@ fn parse_layer_from_py(
         Ok(value) => value.extract()?,
         Err(_) => None,
     };
+    let keep_short_lines: bool = match layer.get_item("keep_short_lines") {
+        Ok(value) => value.extract()?,
+        Err(_) => false,
+    };
 
     Ok(LayerData {
         name,
@@ -237,6 +241,7 @@ fn parse_layer_from_py(
         min_zoom: layer_min_zoom,
         max_zoom: layer_max_zoom,
         polygon_simplify,
+        keep_short_lines,
     })
 }
 
@@ -380,7 +385,7 @@ impl _LayeredTiler {
     /// GeoDataFrame's `to_arrow()`, ...), reproject it to EPSG:4326 in Rust,
     /// tile and spool it. Returns a dict report.
     #[cfg(feature = "arrow")]
-    #[pyo3(signature = (name, source, min_zoom, max_zoom, geometry_column=None, crs=None, polygon_simplify=None))]
+    #[pyo3(signature = (name, source, min_zoom, max_zoom, geometry_column=None, crs=None, polygon_simplify=None, keep_short_lines=false))]
     #[allow(clippy::too_many_arguments)]
     fn add_arrow_layer<'py>(
         &mut self,
@@ -392,6 +397,7 @@ impl _LayeredTiler {
         geometry_column: Option<String>,
         crs: Option<String>,
         polygon_simplify: Option<f64>,
+        keep_short_lines: bool,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
         use arrow_array::RecordBatchReader;
@@ -442,6 +448,7 @@ impl _LayeredTiler {
                 let batches = reader.map(|b| b.map_err(|e| e.to_string()));
                 let (mut data, report) = batches_to_layer(schema, batches, &opts)?;
                 data.polygon_simplify = polygon_simplify;
+                data.keep_short_lines = keep_short_lines;
                 let count = data.features.len();
                 if count == 0 {
                     return Err(format!("layer '{}' has no features", data.name));
