@@ -241,6 +241,32 @@ mod tests {
     }
 
     #[test]
+    fn only_a_line_certainly_written_is_settled_in_its_home_tile() {
+        let buffer = 5.0 / 256.0;
+        let long = line(&[at(&TILE, 10.0, 10.0), at(&TILE, 20.0, 10.0)]);
+        assert!(written_in_home_tile(&long, TILE.z, buffer));
+        // Within one pixel: not written.
+        let short = line(&[at(&TILE, 10.1, 10.1), at(&TILE, 10.3, 10.1)]);
+        assert!(!written_in_home_tile(&short, TILE.z, buffer));
+        // Inside the buffer is inside the clip; beyond it needs the real clip.
+        let in_buffer = line(&[at(&TILE, 4090.0, 10.0), at(&TILE, 4100.0, 10.0)]);
+        assert!(written_in_home_tile(&in_buffer, TILE.z, buffer));
+        let beyond = line(&[at(&TILE, 4090.0, 10.0), at(&TILE, 4300.0, 10.0)]);
+        assert!(!written_in_home_tile(&beyond, TILE.z, buffer));
+        // Multi-part lines and lines off the map always take the real path.
+        let multi = Geometry::MultiLineString(MultiLineString(vec![LineString::from(vec![
+            at(&TILE, 10.0, 10.0),
+            at(&TILE, 20.0, 10.0),
+        ])]));
+        assert!(!written_in_home_tile(&multi, TILE.z, buffer));
+        assert!(!written_in_home_tile(
+            &line(&[(10.0, 89.0), (10.0, 80.0)]),
+            3,
+            buffer
+        ));
+    }
+
+    #[test]
     fn no_tile_covers_a_line_off_the_map() {
         assert!(minimal_line(&line(&[(10.0, 89.0), (10.0, 89.5)]), 3).is_none());
         // A vertex on the map is enough.
