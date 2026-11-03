@@ -289,6 +289,7 @@ mod geoparquet_impl {
             min_zoom,
             max_zoom,
             polygon_simplify: None,
+            keep_short_lines: false,
         }])
     }
 
@@ -705,6 +706,7 @@ mod duckdb_impl {
             min_zoom,
             max_zoom,
             polygon_simplify: None,
+            keep_short_lines: false,
         }])
     }
 

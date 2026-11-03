@@ -1,12 +1,14 @@
 use pmtiles2::util::tile_id;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::pmtiles_writer::{TileFormat, TileSpool};
 use crate::tiler::{Feature, Geometry, LayerData, TileCoord};
 use crate::{
-    clip, cluster, coalesce, drop, mlt, mvt, pmtiles_writer, polygon_zoom, simplify, tiler,
+    clip, cluster, coalesce, drop, mlt, mvt, pmtiles_writer, polygon_zoom, short_lines, simplify,
+    tiler,
 };
 
 /// Configuration for tile generation
@@ -84,6 +86,96 @@ pub fn compute_all_bounds(layers: &[LayerData]) -> (f64, f64, f64, f64) {
     }
 
     (west, south, east, north)
+}
+
+/// A feature's geometry in one tile: clipped, then snapped to the tile pixel
+/// grid. `geometry` is the feature's geometry for this zoom, which for a line
+/// may be pre-simplified.
+fn tile_geometry(
+    feature: &Feature,
+    geometry: &Geometry,
+    coord: &TileCoord,
+    buffer_fraction: f64,
+    do_simplify: bool,
+) -> Option<Geometry> {
+    // Clip to tile boundaries, then snap to the tile pixel grid
+    let process = |g: &Geometry| {
+        let clipped = clip::clip_geometry_to_tile_buffered(g, coord, buffer_fraction)?;
+        Some(if do_simplify {
+            simplify::simplify_geometry(&clipped, coord)
+        } else {
+            clipped
+        })
+    };
+    let mut out = process(geometry);
+
+    // Visvalingam-Whyatt can reduce a short, nearly closed line to its two end
+    // points, which then share a pixel and the line vanishes at this zoom.
+    // Fall back to the original line rather than drop it.
+    let presimplified = !std::ptr::eq(geometry, &feature.geometry);
+    if presimplified
+        && out
+            .as_ref()
+            .map_or(true, |g| simplify::line_collapses(g, coord))
+    {
+        if let Some(original) = process(&feature.geometry) {
+            out = Some(original);
+        }
+    }
+    out
+}
+
+/// Line features of a layer that no tile of this zoom would contain, each as
+/// its minimal form in its home tile (see [`crate::short_lines`]), in feature
+/// order.
+///
+/// Whether a tile writes a feature does not depend on any other tile, so the
+/// result is the same whichever thread looks first; the flag only saves looking
+/// again once some tile has the feature. Features outside `tile_map` (dropped
+/// by `drop_rate`) stay dropped, because `candidates` leaves them out.
+fn absent_lines<'a>(
+    features: &'a [Feature],
+    line_at: &(dyn Fn(usize) -> Option<&'a Geometry> + Sync),
+    candidates: Option<&[bool]>,
+    tile_map: &HashMap<TileCoord, Vec<usize>>,
+    zoom: u8,
+    buffer_fraction: f64,
+    do_simplify: bool,
+) -> Vec<(usize, TileCoord, Geometry)> {
+    let found: Vec<AtomicBool> = features.iter().map(|_| AtomicBool::new(false)).collect();
+    tile_map.par_iter().for_each(|(coord, indices)| {
+        for &idx in indices {
+            if found[idx].load(Ordering::Relaxed) {
+                continue;
+            }
+            let Some(geometry) = line_at(idx) else {
+                continue;
+            };
+            let written = tile_geometry(
+                &features[idx],
+                geometry,
+                coord,
+                buffer_fraction,
+                do_simplify,
+            )
+            .is_some_and(|g| !simplify::line_collapses(&g, coord));
+            if written {
+                found[idx].store(true, Ordering::Relaxed);
+            }
+        }
+    });
+    (0..features.len())
+        .into_par_iter()
+        .filter(|&idx| {
+            candidates.map_or(true, |mask| mask[idx])
+                && line_at(idx).is_some()
+                && !found[idx].load(Ordering::Relaxed)
+        })
+        .filter_map(|idx| {
+            let (coord, geometry) = short_lines::minimal_line(&features[idx].geometry, zoom)?;
+            Some((idx, coord, geometry))
+        })
+        .collect()
 }
 
 /// Generate tiles from layers, spooling each encoded (gzip-compressed) tile
@@ -227,6 +319,9 @@ fn generate_tiles_into(
             /// Pieces already simplified and clipped for this zoom, per tile
             /// (layers with `polygon_simplify`).
             polygon_pieces: HashMap<TileCoord, Vec<(usize, Geometry)>>,
+            /// One-tile-unit stand-ins for lines no tile of this zoom would
+            /// otherwise contain (layers with `keep_short_lines`).
+            kept_lines: HashMap<TileCoord, Vec<(usize, Geometry)>>,
         }
 
         impl ActiveLayer<'_> {
@@ -338,6 +433,44 @@ fn generate_tiles_into(
                 buffer_fraction,
             );
 
+            // Find the lines that would be absent from every tile of this zoom.
+            // Only MVT can lose one: MLT writes a line's vertices as they are.
+            let mut kept_lines: HashMap<TileCoord, Vec<(usize, Geometry)>> = HashMap::new();
+            if layer.keep_short_lines && matches!(format, TileFormat::Mvt) && !using_clusters {
+                let line_at = |idx: usize| -> Option<&Geometry> {
+                    match &features[idx].geometry {
+                        Geometry::LineString(_) | Geometry::MultiLineString(_) => Some(
+                            simplified_geoms
+                                .as_ref()
+                                .and_then(|v| v[idx].as_ref())
+                                .unwrap_or(&features[idx].geometry),
+                        ),
+                        _ => None,
+                    }
+                };
+                let absent = absent_lines(
+                    features,
+                    &line_at,
+                    drop_mask.as_deref(),
+                    &tile_map,
+                    zoom,
+                    buffer_fraction,
+                    do_simplify,
+                );
+                if !absent.is_empty() {
+                    reporter.report(&format!(
+                        "  Zoom {:>2}/{}: layer '{}' keeps {} lines that collapse to one pixel",
+                        zoom,
+                        max_z,
+                        layer.name,
+                        absent.len()
+                    ));
+                }
+                for (idx, coord, geometry) in absent {
+                    kept_lines.entry(coord).or_default().push((idx, geometry));
+                }
+            }
+
             active_layers.push(ActiveLayer {
                 layer_idx: li,
                 features,
@@ -345,13 +478,19 @@ fn generate_tiles_into(
                 tile_map,
                 simplified_geoms,
                 polygon_pieces,
+                kept_lines,
             });
         }
 
         // Collect all tile coords across all active layers
         let mut all_coords: HashSet<TileCoord> = HashSet::new();
         for al in &active_layers {
-            for coord in al.tile_map.keys().chain(al.polygon_pieces.keys()) {
+            for coord in al
+                .tile_map
+                .keys()
+                .chain(al.polygon_pieces.keys())
+                .chain(al.kept_lines.keys())
+            {
                 all_coords.insert(*coord);
             }
         }
@@ -385,47 +524,23 @@ fn generate_tiles_into(
 
                         let feature_indices = al.tile_map.get(&coord);
                         let polygon_pieces = al.polygon_pieces.get(&coord);
-                        if feature_indices.is_some() || polygon_pieces.is_some() {
+                        let kept_lines = al.kept_lines.get(&coord);
+                        if feature_indices.is_some()
+                            || polygon_pieces.is_some()
+                            || kept_lines.is_some()
+                        {
                             let mut tile_feats: Vec<Feature> = feature_indices
                                 .into_iter()
                                 .flatten()
                                 .filter_map(|&idx| {
                                     let feature = &al.features[idx];
-                                    let geom_to_process = al.geom_for(idx);
-
-                                    // Clip to tile boundaries, then snap to
-                                    // the tile pixel grid
-                                    let process = |g: &Geometry| {
-                                        let clipped = clip::clip_geometry_to_tile_buffered(
-                                            g,
-                                            &coord,
-                                            buffer_fraction,
-                                        )?;
-                                        Some(if do_simplify {
-                                            simplify::simplify_geometry(&clipped, &coord)
-                                        } else {
-                                            clipped
-                                        })
-                                    };
-                                    let mut geometry = process(geom_to_process);
-
-                                    // Visvalingam-Whyatt can reduce a short,
-                                    // nearly closed line to its two end points,
-                                    // which then share a pixel and the line
-                                    // vanishes at this zoom. Fall back to the
-                                    // original line rather than drop it.
-                                    let presimplified =
-                                        !std::ptr::eq(geom_to_process, &feature.geometry);
-                                    if presimplified
-                                        && geometry
-                                            .as_ref()
-                                            .map_or(true, |g| simplify::line_collapses(g, &coord))
-                                    {
-                                        if let Some(original) = process(&feature.geometry) {
-                                            geometry = Some(original);
-                                        }
-                                    }
-                                    let geometry = geometry?;
+                                    let geometry = tile_geometry(
+                                        feature,
+                                        al.geom_for(idx),
+                                        &coord,
+                                        buffer_fraction,
+                                        do_simplify,
+                                    )?;
 
                                     Some(Feature {
                                         id: feature.id,
@@ -444,6 +559,15 @@ fn generate_tiles_into(
                                     } else {
                                         piece.clone()
                                     },
+                                    properties: feature.properties.clone(),
+                                });
+                            }
+
+                            for (idx, line) in kept_lines.into_iter().flatten() {
+                                let feature = &al.features[*idx];
+                                tile_feats.push(Feature {
+                                    id: feature.id,
+                                    geometry: line.clone(),
                                     properties: feature.properties.clone(),
                                 });
                             }

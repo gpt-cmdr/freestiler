@@ -16,6 +16,7 @@ pub mod mvt;
 pub mod pmtiles_writer;
 pub mod polygon_zoom;
 pub mod quantize;
+pub mod short_lines;
 pub mod simplify;
 pub mod supercluster;
 #[cfg(feature = "duckdb")]

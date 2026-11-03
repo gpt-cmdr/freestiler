@@ -1,5 +1,14 @@
 # freestiler 0.3.0.9000
 
+* New per-layer `keep_short_lines` option (Python
+  `freestile_layer(keep_short_lines=)` / `FreestileLayer`, Rust
+  `LayerData::keep_short_lines`, off by default). A line whose vertices all snap
+  to one tile pixel cannot be written as MVT, which forbids a zero-length
+  `LineTo`, so it was absent at that zoom. With the option, a line that no tile
+  of a zoom would contain is written once as a one-tile-unit segment on that
+  pixel, in the tile holding its first vertex. Lines already written are
+  unchanged, and with the option off the output is byte-identical.
+
 * New per-layer `polygon_simplify` option (Python
   `freestile_layer(polygon_simplify=)` / `FreestileLayer`, Rust
   `LayerData::polygon_simplify`, off by default): a Douglas-Peucker tolerance

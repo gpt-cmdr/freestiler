@@ -68,6 +68,17 @@ class FreestileLayer:
         feature is dropped. None (the default) keeps the regular path, whose
         output is unchanged. Do not set it on a mesh: polygons are simplified
         independently, so edges shared between them stop being coincident.
+    keep_short_lines : bool
+        Keep every line feature at every zoom of this layer (MVT). A line that
+        no tile of a zoom would contain, because all its vertices snap to one
+        tile pixel, is written once as a one-tile-unit segment on that pixel,
+        in the tile holding its first vertex (MVT forbids a zero-length
+        segment). Lines already written are not touched. False (the default)
+        leaves the output byte-identical. A line that is present in another
+        tile gets no stand-in, and a multi-part line with one part left is
+        present, so its collapsed parts stay out. Not with categorical
+        clustering. MLT already writes collapsed lines, so it changes nothing
+        there.
     """
 
     input: object
@@ -76,6 +87,7 @@ class FreestileLayer:
     crs: object = None
     geometry_column: str | None = None
     polygon_simplify: float | None = None
+    keep_short_lines: bool = False
 
 
 def freestile_layer(
@@ -86,6 +98,7 @@ def freestile_layer(
     crs=None,
     geometry_column: str | None = None,
     polygon_simplify: float | None = None,
+    keep_short_lines: bool = False,
 ) -> FreestileLayer:
     """Create a layer with per-layer zoom control.
 
@@ -100,6 +113,8 @@ def freestile_layer(
     polygon_simplify : float, optional
         Per-zoom polygon simplification tolerance in tile pixels; see
         ``FreestileLayer``. None keeps the regular polygon path.
+    keep_short_lines : bool, optional
+        Keep every line feature at every zoom; see ``FreestileLayer``.
 
     Returns
     -------
@@ -107,7 +122,8 @@ def freestile_layer(
     """
     return FreestileLayer(input=input, min_zoom=min_zoom, max_zoom=max_zoom,
                           crs=crs, geometry_column=geometry_column,
-                          polygon_simplify=polygon_simplify)
+                          polygon_simplify=polygon_simplify,
+                          keep_short_lines=keep_short_lines)
 
 
 def _is_arrow(obj) -> bool:
@@ -334,6 +350,7 @@ def freestile(
     rust_layers = []
     for name, value in layers_dict.items():
         polygon_simplify = None
+        keep_short_lines = False
         if isinstance(value, FreestileLayer):
             gdf = value.input
             layer_min = value.min_zoom if value.min_zoom is not None else min_zoom
@@ -341,12 +358,16 @@ def freestile(
             polygon_simplify = _check_polygon_simplify(value.polygon_simplify)
             if polygon_simplify is not None and categorical:
                 raise ValueError("polygon_simplify is not supported with categorical clustering")
+            keep_short_lines = _check_keep_short_lines(value.keep_short_lines)
+            if keep_short_lines and categorical:
+                raise ValueError("keep_short_lines is not supported with categorical clustering")
         else:
             gdf = value
             layer_min = min_zoom
             layer_max = max_zoom
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
         layer_data["polygon_simplify"] = polygon_simplify
+        layer_data["keep_short_lines"] = keep_short_lines
         rust_layers.append(layer_data)
 
     # Call Rust
@@ -469,6 +490,12 @@ def _check_polygon_simplify(tolerance):
     return float(tolerance)
 
 
+def _check_keep_short_lines(keep) -> bool:
+    if not isinstance(keep, (bool, np.bool_)):
+        raise ValueError("keep_short_lines must be True or False")
+    return bool(keep)
+
+
 def _check_gzip_level(gzip_level) -> int:
     if isinstance(gzip_level, bool) or not isinstance(gzip_level, (int, np.integer)) \
             or not 0 <= gzip_level <= 9:
@@ -503,12 +530,14 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
         if isinstance(source, (str, os.PathLike)):
             source = gpd.read_parquet(source)
         crs = geometry_column = polygon_simplify = None
+        keep_short_lines = False
         if isinstance(source, FreestileLayer):
             gdf = source.input
             layer_min = source.min_zoom if source.min_zoom is not None else min_zoom
             layer_max = source.max_zoom if source.max_zoom is not None else max_zoom
             crs, geometry_column = source.crs, source.geometry_column
             polygon_simplify = _check_polygon_simplify(source.polygon_simplify)
+            keep_short_lines = _check_keep_short_lines(source.keep_short_lines)
         else:
             gdf, layer_min, layer_max = source, min_zoom, max_zoom
         source = None
@@ -517,6 +546,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
                 name, gdf, layer_min, layer_max,
                 geometry_column=geometry_column, crs=_crs_text(crs),
                 polygon_simplify=polygon_simplify,
+                keep_short_lines=keep_short_lines,
             )
             if not quiet and report.get("reprojection"):
                 print(f"  Reprojected layer '{name}' to WGS84 in Rust")
@@ -526,6 +556,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
             raise ValueError("crs and geometry_column apply to Arrow input only")
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
         layer_data["polygon_simplify"] = polygon_simplify
+        layer_data["keep_short_lines"] = keep_short_lines
         gdf = None
         tiler.add_layer(layer_data)
         layer_data = None

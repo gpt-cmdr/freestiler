@@ -44,6 +44,12 @@ pub struct LayerData {
     /// pixels (1/4096 of a tile side); `None` keeps the default polygon path.
     /// See [`crate::polygon_zoom`]. Not for a mesh, whose cells share edges.
     pub polygon_simplify: Option<f64>,
+    /// Keep every line feature at every zoom of this layer: a line that no
+    /// tile of a zoom would contain, because it collapses to one tile pixel,
+    /// is written once as a one-tile-unit segment in the tile holding its first
+    /// vertex. Lines already written are not touched. See
+    /// [`crate::short_lines`]. Off leaves the output unchanged.
+    pub keep_short_lines: bool,
 }
 
 /// A tile coordinate
