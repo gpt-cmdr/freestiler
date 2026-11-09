@@ -14,8 +14,11 @@
       tiles are unchanged.
     * Per-layer `line_simplify` (Python `freestile_layer(line_simplify=)` /
       `FreestileLayer`, Rust `LayerData::line_simplify`): a Douglas-Peucker
-      tolerance in tile pixels, above 0 and at most 64, applied to that
-      layer's lines once per zoom in place of the default simplification.
+      tolerance in tile pixels (1/4096 of a tile side, not the 256-pixel
+      scale `buffer` uses), above 0 and at most 64, applied to that layer's
+      lines once per zoom in place of the default simplification. It needs
+      `simplification=True` (the default); with `simplification=False` no
+      line is simplified.
       End points are kept, a line that would collapse keeps its input
       vertices, and `keep_short_lines` still applies. Do not use it on mesh
       faces: lines are simplified independently, so faces that meet stop
