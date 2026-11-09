@@ -34,7 +34,8 @@ make it runnable in a pull request, publish these files together:
 - `src/rust/freestiler-core/src/supercluster/`, including tests and upstream notices
 - `src/rust/freestiler-core/tests/fixtures/supercluster-8.0.1.json.gz`
 
-The workflow then tests macOS, Linux and Windows with stable and 1.77.2 compilers
-in debug and release. A local YAML file is not evidence that any remote check
+The workflow then tests Linux and Windows with stable and 1.77.2 compilers
+in debug and release; macOS runs only in a manual run with `include_macos`,
+so a passing pull-request check is not macOS coverage. A local YAML file is not evidence that any remote check
 has started. Manual `workflow_dispatch` additionally requires the workflow on
 the default branch. This harness is excluded from the R source package.
