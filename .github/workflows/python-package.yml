@@ -84,9 +84,9 @@ jobs:
 
   build-wheels:
     name: Build Wheel (${{ matrix.os }}, py${{ matrix.python-version }})
-    # Fork pull requests -> GitHub-hosted matrix.os; otherwise matrix.self_hosted
-    # when the entry has one (Windows), else matrix.os (Linux: Docker, see top).
-    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('["{0}"]', matrix.os) || matrix.self_hosted || format('["{0}"]', matrix.os)) }}
+    # Linux wheels: GitHub-hosted (maturin-action manylinux Docker, see top).
+    # Windows wheels are the build-wheels-windows job below.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -124,64 +124,11 @@ jobs:
             manylinux: "2_28"
             duckdb_explicit_platform: "linux_amd64"
             interpreter: "/opt/python/cp314-cp314/bin/python"
-          # Self-hosted Windows has VS 2022 Build Tools. GitHub-hosted (fork
-          # pull requests) is pinned to windows-2022 (VS 2022): both windows-latest and
-          # windows-2025 now resolve to the VS 2026 image, whose MSVC removed
-          # stdext::checked_array_iterator and breaks the bundled DuckDB build
-          # (vendored fmt). Revisit once duckdb-rs supports VS 2026.
-          - os: windows-2022
-            python-version: "3.9"
-            manylinux: "auto"
-            duckdb_explicit_platform: ""
-            interpreter: "python"
-            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
-          - os: windows-2022
-            python-version: "3.10"
-            manylinux: "auto"
-            duckdb_explicit_platform: ""
-            interpreter: "python"
-            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
-          - os: windows-2022
-            python-version: "3.11"
-            manylinux: "auto"
-            duckdb_explicit_platform: ""
-            interpreter: "python"
-            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
-          - os: windows-2022
-            python-version: "3.12"
-            manylinux: "auto"
-            duckdb_explicit_platform: ""
-            interpreter: "python"
-            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
-          - os: windows-2022
-            python-version: "3.13"
-            manylinux: "auto"
-            duckdb_explicit_platform: ""
-            interpreter: "python"
-            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
-          - os: windows-2022
-            python-version: "3.14"
-            manylinux: "auto"
-            duckdb_explicit_platform: ""
-            interpreter: "python"
-            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # The self-hosted Windows image has rustup on PATH but may lack the cargo
-      # proxies (CARGO_HOME=C:\rust\cargo): put the selected toolchain's cargo
-      # directory on PATH. Linux wheels build inside the manylinux container.
-      - uses: dtolnay/rust-toolchain@stable
-        if: runner.os == 'Windows'
-      - name: Put the toolchain's cargo on PATH
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          cargo_exe="$(rustup which cargo)"
-          cargo_exe="${cargo_exe//\\//}"
-          echo "${cargo_exe%/*}" >> "$GITHUB_PATH"
       - uses: PyO3/maturin-action@v1
         env:
           DUCKDB_EXPLICIT_PLATFORM: ${{ matrix.duckdb_explicit_platform }}
@@ -192,6 +139,45 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*
+
+  # Windows wheels run on the self-hosted Windows runner: one VM shared by every CLB
+  # repository, one job at a time. Pull requests and pushes to main build one Python
+  # version; python-v* release tags and manual runs build all six (PE decision 2026-11-09).
+  build-wheels-windows:
+    name: Build Wheel (windows-2022, py${{ matrix.python-version }})
+    # Fork pull requests -> GitHub-hosted windows-2022; otherwise the self-hosted runner,
+    # which has VS 2022 Build Tools. GitHub-hosted is pinned to windows-2022 (VS 2022):
+    # windows-latest and windows-2025 resolve to the VS 2026 image, whose MSVC removed
+    # stdext::checked_array_iterator and breaks the bundled DuckDB build (vendored fmt).
+    # Revisit once duckdb-rs supports VS 2026.
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '["windows-2022"]' || '["self-hosted", "Windows", "X64", "clb-ci-windows"]') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON((startsWith(github.ref, 'refs/tags/python-v') || github.event_name == 'workflow_dispatch') && '["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]' || '["3.12"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # The self-hosted Windows image has rustup on PATH but may lack the cargo
+      # proxies (CARGO_HOME=C:\rust\cargo): put the selected toolchain's cargo
+      # directory on PATH.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Put the toolchain's cargo on PATH
+        shell: bash
+        run: |
+          cargo_exe="$(rustup which cargo)"
+          cargo_exe="${cargo_exe//\\//}"
+          echo "${cargo_exe%/*}" >> "$GITHUB_PATH"
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --manifest-path python/Cargo.toml --release --out dist -i python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-2022-py${{ matrix.python-version }}
           path: dist/*
 
   # Release tags and manual opt-in only (see the note at the top of this file).
@@ -243,7 +229,7 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [test-native-input, build-wheels, build-wheels-macos, build-sdist]
+    needs: [test-native-input, build-wheels, build-wheels-windows, build-wheels-macos, build-sdist]
     if: startsWith(github.ref, 'refs/tags/python-v')
     runs-on: ubuntu-latest
     environment:
