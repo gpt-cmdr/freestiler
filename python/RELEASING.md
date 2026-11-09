@@ -82,6 +82,7 @@ published only as GitHub Release assets on the fork.
    prefix triggers the PyPI publish job.
 3. Run the **Python Package** workflow manually on the tag
    (`gh workflow run python-package.yml -R gpt-cmdr/freestiler --ref <tag>`);
-   the publish job is skipped because the ref is not `python-v*`.
+   the publish job is skipped because the ref is not `python-v*`. macOS
+   wheels are built only when asked for: add `-f include_macos=true`.
 4. Download the wheel and sdist artifacts, write `SHA256SUMS`, and attach them
    to a GitHub Release for the tag.
