@@ -50,6 +50,15 @@ jobs:
       - name: Cargo on PATH
         shell: bash
         run: echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+      # fastpfor's build script needs CMake, which the self-hosted image lacks
+      # and cannot apt-install (no root); uv installs the PyPI build under HOME.
+      - name: CMake
+        shell: bash
+        run: |
+          if ! command -v cmake >/dev/null; then
+            uv tool install cmake
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
       - name: Test temporal properties and CRS-tagged geometry
         run: cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --features geoparquet,duckdb --test native_input
       - name: Test tile gzip levels
