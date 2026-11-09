@@ -1,5 +1,29 @@
 # freestiler 0.3.0.9000
 
+* Three new options make sparse tilesets smaller without dropping a feature
+  (gpt-cmdr fork build 0.3.0.4). All are off by default, and with them off the
+  archive is byte-identical to the previous build.
+    * `deduplicate` (Python `freestile()` / `freestile_layers()`, Rust
+      `TileConfig::deduplicate`): identical compressed tiles are stored once in
+      the PMTiles archive and runs of consecutive tile IDs share one directory
+      entry. Every tile is still addressed and decompresses to the same bytes.
+    * `sort_values` (Python `freestile()` / `freestile_layers()`, Rust
+      `TileConfig::sort_values`, MVT only): each layer is written as name,
+      keys, values sorted by their encoded bytes, extent, version, then
+      features, which compresses better on property-heavy layers. Decoded
+      tiles are unchanged.
+    * Per-layer `line_simplify` (Python `freestile_layer(line_simplify=)` /
+      `FreestileLayer`, Rust `LayerData::line_simplify`): a Douglas-Peucker
+      tolerance in tile pixels, above 0 and at most 64, applied to that
+      layer's lines once per zoom in place of the default simplification.
+      End points are kept, a line that would collapse keeps its input
+      vertices, and `keep_short_lines` still applies. Do not use it on mesh
+      faces: lines are simplified independently, so faces that meet stop
+      sharing vertices.
+
+  None of the three is available in `freestile_file()`, the streaming DuckDB
+  pipeline or categorical clustering.
+
 * New per-layer `keep_short_lines` option (Python
   `freestile_layer(keep_short_lines=)` / `FreestileLayer`, Rust
   `LayerData::keep_short_lines`, off by default). A line whose vertices all snap
