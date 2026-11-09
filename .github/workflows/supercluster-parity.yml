@@ -32,7 +32,13 @@ on:
       - "LICENSE.note"
       - ".Rbuildignore"
       - "python/pyproject.toml"
+  # macOS is GitHub-hosted, slow and expensive: it runs only when requested here.
   workflow_dispatch:
+    inputs:
+      include_macos:
+        description: "Also run the kernel on macOS"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-2022, macos-15]
+        os: ${{ fromJSON(inputs.include_macos && '["ubuntu-latest", "windows-2022", "macos-15"]' || '["ubuntu-latest", "windows-2022"]') }}
         toolchain: ["1.77.2", stable]
     steps:
       - uses: actions/checkout@v4
