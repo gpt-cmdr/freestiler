@@ -232,6 +232,10 @@ fn parse_layer_from_py(
         Ok(value) => value.extract()?,
         Err(_) => false,
     };
+    let line_simplify: Option<f64> = match layer.get_item("line_simplify") {
+        Ok(value) => value.extract()?,
+        Err(_) => None,
+    };
 
     Ok(LayerData {
         name,
@@ -242,6 +246,7 @@ fn parse_layer_from_py(
         max_zoom: layer_max_zoom,
         polygon_simplify,
         keep_short_lines,
+        line_simplify,
     })
 }
 
@@ -263,6 +268,8 @@ fn make_config(
     do_coalesce: bool,
     gzip_level: Option<u32>,
     buffer: Option<f64>,
+    deduplicate: bool,
+    sort_values: bool,
 ) -> TileConfig {
     TileConfig {
         tile_format: match tile_format {
@@ -295,6 +302,8 @@ fn make_config(
         coalesce: do_coalesce,
         gzip_level,
         buffer,
+        deduplicate,
+        sort_values,
     }
 }
 
@@ -315,7 +324,7 @@ impl _LayeredTiler {
     #[new]
     #[pyo3(signature = (tile_format, min_zoom, max_zoom, base_zoom, do_simplify,
         generate_ids, quiet, drop_rate, cluster_distance, cluster_maxzoom, do_coalesce,
-        gzip_level=None, buffer=None))]
+        gzip_level=None, buffer=None, deduplicate=false, sort_values=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         tile_format: &str,
@@ -331,6 +340,8 @@ impl _LayeredTiler {
         do_coalesce: bool,
         gzip_level: Option<u32>,
         buffer: Option<f64>,
+        deduplicate: bool,
+        sort_values: bool,
     ) -> PyResult<Self> {
         let config = make_config(
             tile_format,
@@ -344,6 +355,8 @@ impl _LayeredTiler {
             do_coalesce,
             gzip_level,
             buffer,
+            deduplicate,
+            sort_values,
         );
         let inner = engine::LayeredTiler::new(config).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Error: {}", e))
@@ -385,7 +398,7 @@ impl _LayeredTiler {
     /// GeoDataFrame's `to_arrow()`, ...), reproject it to EPSG:4326 in Rust,
     /// tile and spool it. Returns a dict report.
     #[cfg(feature = "arrow")]
-    #[pyo3(signature = (name, source, min_zoom, max_zoom, geometry_column=None, crs=None, polygon_simplify=None, keep_short_lines=false))]
+    #[pyo3(signature = (name, source, min_zoom, max_zoom, geometry_column=None, crs=None, polygon_simplify=None, keep_short_lines=false, line_simplify=None))]
     #[allow(clippy::too_many_arguments)]
     fn add_arrow_layer<'py>(
         &mut self,
@@ -398,6 +411,7 @@ impl _LayeredTiler {
         crs: Option<String>,
         polygon_simplify: Option<f64>,
         keep_short_lines: bool,
+        line_simplify: Option<f64>,
     ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
         use arrow_array::RecordBatchReader;
@@ -449,6 +463,7 @@ impl _LayeredTiler {
                 let (mut data, report) = batches_to_layer(schema, batches, &opts)?;
                 data.polygon_simplify = polygon_simplify;
                 data.keep_short_lines = keep_short_lines;
+                data.line_simplify = line_simplify;
                 let count = data.features.len();
                 if count == 0 {
                     return Err(format!("layer '{}' has no features", data.name));
@@ -506,7 +521,7 @@ impl _LayeredTiler {
 #[pyfunction]
 #[pyo3(signature = (layers, output_path, tile_format, min_zoom, max_zoom,
     base_zoom, do_simplify, generate_ids, quiet, drop_rate, cluster_distance,
-    cluster_maxzoom, do_coalesce, gzip_level=None, buffer=None))]
+    cluster_maxzoom, do_coalesce, gzip_level=None, buffer=None, deduplicate=false, sort_values=false))]
 fn _freestile(
     py: Python<'_>,
     layers: Vec<Py<PyAny>>,
@@ -524,6 +539,8 @@ fn _freestile(
     do_coalesce: bool,
     gzip_level: Option<u32>,
     buffer: Option<f64>,
+    deduplicate: bool,
+    sort_values: bool,
 ) -> PyResult<String> {
     // Parse layers from Python dicts
     let parse_start = Instant::now();
@@ -564,6 +581,8 @@ fn _freestile(
         do_coalesce,
         gzip_level,
         buffer,
+        deduplicate,
+        sort_values,
     );
 
     match engine::generate_pmtiles(&layer_data, output_path, &config, reporter.as_ref()) {
@@ -645,6 +664,8 @@ fn _freestile_file(
         coalesce: do_coalesce,
         gzip_level: None,
         buffer: None,
+        deduplicate: false,
+        sort_values: false,
     };
 
     match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {
@@ -716,6 +737,8 @@ fn _freestile_duckdb_query(
         coalesce: do_coalesce,
         gzip_level: None,
         buffer: None,
+        deduplicate: false,
+        sort_values: false,
     };
 
     let maybe_stream = match streaming_mode {
@@ -841,6 +864,8 @@ fn _freestile_duckdb(
         coalesce: do_coalesce,
         gzip_level: None,
         buffer: None,
+        deduplicate: false,
+        sort_values: false,
     };
 
     match engine::generate_pmtiles(&layers, output_path, &config, reporter.as_ref()) {

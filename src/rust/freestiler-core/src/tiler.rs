@@ -50,6 +50,12 @@ pub struct LayerData {
     /// vertex. Lines already written are not touched. See
     /// [`crate::short_lines`]. Off leaves the output unchanged.
     pub keep_short_lines: bool,
+    /// Per-zoom Douglas-Peucker simplification of this layer's lines, as a
+    /// tolerance in tile pixels (1/4096 of a tile side), in place of the
+    /// default Visvalingam-Whyatt pre-simplification. `None` keeps the
+    /// default. See [`crate::line_zoom`]. Not for mesh faces, whose interior
+    /// vertices are shared with the cells drawn over them.
+    pub line_simplify: Option<f64>,
 }
 
 /// A tile coordinate

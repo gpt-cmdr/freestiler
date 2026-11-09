@@ -269,6 +269,7 @@ where
             max_zoom: opts.max_zoom,
             polygon_simplify: None,
             keep_short_lines: false,
+            line_simplify: None,
         },
         report,
     ))

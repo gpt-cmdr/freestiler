@@ -46,6 +46,10 @@ jobs:
         run: |
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test polygon_zoom
           cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --lib -- polygon_zoom::
+      - name: Test tile deduplication, sorted values and per-zoom line simplification
+        run: |
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --test compact
+          cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --lib -- line_zoom:: pmtiles_writer::
       - name: Test Arrow input and pure-Rust reprojection
         run: "cargo test --locked --manifest-path src/rust/freestiler-core/Cargo.toml --features arrow --lib -- crs:: arrow_input:: mvt::"
 

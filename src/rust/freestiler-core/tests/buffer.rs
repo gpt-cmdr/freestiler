@@ -44,6 +44,7 @@ fn mesh() -> LayerData {
         max_zoom: 15,
         polygon_simplify: None,
         keep_short_lines: false,
+        line_simplify: None,
     }
 }
 
@@ -60,6 +61,8 @@ fn config(buffer: Option<f64>) -> TileConfig {
         coalesce: false,
         gzip_level: None,
         buffer,
+        deduplicate: false,
+        sort_values: false,
     }
 }
 

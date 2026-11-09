@@ -28,6 +28,8 @@ fn config() -> TileConfig {
         coalesce: false,
         gzip_level: None,
         buffer: Some(5.0),
+        deduplicate: false,
+        sort_values: false,
     }
 }
 
@@ -100,6 +102,7 @@ fn layer(features: Vec<Feature>, keep: bool) -> LayerData {
         max_zoom: MAX_ZOOM,
         polygon_simplify: None,
         keep_short_lines: keep,
+        line_simplify: None,
     }
 }
 
@@ -427,6 +430,8 @@ fn every_option_combination_keeps_every_line() {
             simplification,
             coalesce,
             buffer,
+            deduplicate: false,
+            sort_values: false,
             ..config()
         };
         let on = decode(&write(&[layer(features(), true)], &options, "p"), "p");
