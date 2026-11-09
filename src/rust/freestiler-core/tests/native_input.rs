@@ -215,6 +215,8 @@ fn streaming_temporal_properties_survive_pmtiles() {
         coalesce: false,
         gzip_level: None,
         buffer: None,
+        deduplicate: false,
+        sort_values: false,
     };
     freestiler_core::streaming::generate_pmtiles_from_duckdb_query(
         None,

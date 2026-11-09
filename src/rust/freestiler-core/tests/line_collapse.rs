@@ -37,6 +37,7 @@ fn nearly_closed_line_survives_every_zoom() {
         max_zoom: 14,
         polygon_simplify: None,
         keep_short_lines: false,
+        line_simplify: None,
     };
     let config = TileConfig {
         tile_format: TileFormat::Mvt,
@@ -50,6 +51,8 @@ fn nearly_closed_line_survives_every_zoom() {
         coalesce: false,
         gzip_level: None,
         buffer: None,
+        deduplicate: false,
+        sort_values: false,
     };
     let out = std::env::temp_dir().join(format!("freestiler_line_{}.pmtiles", std::process::id()));
     generate_pmtiles(&[layer], out.to_str().unwrap(), &config, &SilentReporter).unwrap();

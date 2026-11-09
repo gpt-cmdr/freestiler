@@ -7,8 +7,8 @@ use std::time::Instant;
 use crate::pmtiles_writer::{TileFormat, TileSpool};
 use crate::tiler::{Feature, Geometry, LayerData, TileCoord};
 use crate::{
-    clip, cluster, coalesce, drop, mlt, mvt, pmtiles_writer, polygon_zoom, short_lines, simplify,
-    tiler,
+    clip, cluster, coalesce, drop, line_zoom, mlt, mvt, pmtiles_writer, polygon_zoom, short_lines,
+    simplify, tiler,
 };
 
 /// Configuration for tile generation
@@ -36,6 +36,17 @@ pub struct TileConfig {
     /// encoded features. Lines and outlines need a buffer of at least half
     /// their rendered width in tile pixels.
     pub buffer: Option<f64>,
+    /// Store byte-identical tiles once in the archive, with run-length
+    /// directory entries, as `pmtiles convert` (tippecanoe's route to
+    /// PMTiles) does. Every tile is still addressed and decodes the same;
+    /// sparse tilesets whose polygons cover whole tiles at high zoom shrink
+    /// the most. Off by default.
+    pub deduplicate: bool,
+    /// MVT only: write each layer's keys and values ahead of its features,
+    /// with the value table sorted by encoded bytes, as tippecanoe does.
+    /// Decoded features, properties and geometry are unchanged; gzip finds
+    /// longer matches, mostly in property-heavy layers. Off by default.
+    pub sort_values: bool,
 }
 
 impl TileConfig {
@@ -309,6 +320,20 @@ fn generate_tiles_into(
         })
         .collect();
 
+    // Rank the lines of layers with `line_simplify` once, likewise.
+    let prepared_lines: Vec<Option<Vec<Option<line_zoom::PreparedLine>>>> = layers
+        .iter()
+        .enumerate()
+        .map(|(li, l)| {
+            l.line_simplify.filter(|_| layer_has_lines[li]).map(|_| {
+                l.features
+                    .par_iter()
+                    .map(line_zoom::prepare_feature)
+                    .collect()
+            })
+        })
+        .collect();
+
     // --- Main tile generation loop ---
     let mut total_tiles: u64 = 0;
     let total_start = Instant::now();
@@ -368,7 +393,21 @@ fn generate_tiles_into(
             // VW presimplify lines (only for layers that actually have lines —
             // for polygon/point layers this buffer would be all-None waste)
             let simplified_geoms: Option<Vec<Option<Geometry>>> =
-                if do_simplify && !using_clusters && layer_has_lines[li] {
+                if let (true, Some(tolerance), Some(prepared)) = (
+                    do_simplify && !using_clusters,
+                    layer.line_simplify,
+                    prepared_lines[li].as_deref(),
+                ) {
+                    // Opted-in lines: Douglas-Peucker at the layer's
+                    // tolerance in tile pixels, from the ranks computed once.
+                    let tolerance2 = line_zoom::tolerance2(tolerance, zoom);
+                    Some(
+                        prepared
+                            .par_iter()
+                            .map(|p| p.as_ref().map(|p| line_zoom::simplified(p, tolerance2)))
+                            .collect(),
+                    )
+                } else if do_simplify && !using_clusters && layer_has_lines[li] {
                     let vw_tol = simplify::vw_tolerance_for_zoom(zoom);
                     Some(
                         features
@@ -616,7 +655,9 @@ fn generate_tiles_into(
                         .collect();
 
                     let tile_bytes = match format {
-                        TileFormat::Mvt => mvt::encode_tile_multilayer(&coord, &layer_refs),
+                        TileFormat::Mvt => {
+                            mvt::encode_tile_layers(&coord, &layer_refs, config.sort_values)
+                        }
                         TileFormat::Mlt => mlt::encode_tile_multilayer(&coord, &layer_refs),
                     };
 
@@ -691,6 +732,14 @@ fn validate_layer(layer: &LayerData) -> Result<(), String> {
             polygon_zoom::MAX_TOLERANCE_PX
         )),
         _ => Ok(()),
+    }?;
+    match layer.line_simplify {
+        Some(tolerance) if !line_zoom::valid_tolerance(tolerance) => Err(format!(
+            "layer '{}': line_simplify must be above 0 and at most {} tile pixels",
+            layer.name,
+            line_zoom::MAX_TOLERANCE_PX
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -739,6 +788,7 @@ pub fn generate_pmtiles(
         .collect();
 
     let mut spool = TileSpool::new()?;
+    spool.set_deduplicate(config.deduplicate);
     generate_tiles(layers, config, reporter, &mut spool)?;
 
     reporter.report(&format!(
@@ -860,6 +910,7 @@ impl LayeredTiler {
         reporter: &dyn ProgressReporter,
     ) -> Result<(), String> {
         let mut tiles = TileSpool::new()?;
+        tiles.set_deduplicate(self.config.deduplicate);
         let entries: Vec<_> = std::mem::take(&mut self.index).into_values().collect();
         // Assemble tiles in batches bounded by both a tile count (for
         // parallel compression) and the raw bytes held at once, so memory

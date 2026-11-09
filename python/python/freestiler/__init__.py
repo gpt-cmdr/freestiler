@@ -79,6 +79,18 @@ class FreestileLayer:
         present, so its collapsed parts stay out. Not with categorical
         clustering. MLT already writes collapsed lines, so it changes nothing
         there.
+    line_simplify : float or None
+        Simplify this layer's lines per zoom with Douglas-Peucker at this
+        tolerance in tile pixels (1/4096 of a tile side), tippecanoe-style,
+        instead of the default Visvalingam-Whyatt pass (an area of about eight
+        square tile pixels). Each line is ranked once and every zoom keeps the
+        vertices above its tolerance, so every dropped vertex lies within the
+        tolerance of the line drawn, at every zoom including the maximum.
+        Endpoints are always kept and no feature is dropped; a line that would
+        collapse falls back to its input vertices, and ``keep_short_lines``
+        still applies. ``1.0`` matches tippecanoe's default. None (the
+        default) leaves the output unchanged. Do not set it on mesh faces,
+        whose interior vertices are shared with the cells drawn over them.
     """
 
     input: object
@@ -88,6 +100,7 @@ class FreestileLayer:
     geometry_column: str | None = None
     polygon_simplify: float | None = None
     keep_short_lines: bool = False
+    line_simplify: float | None = None
 
 
 def freestile_layer(
@@ -99,6 +112,7 @@ def freestile_layer(
     geometry_column: str | None = None,
     polygon_simplify: float | None = None,
     keep_short_lines: bool = False,
+    line_simplify: float | None = None,
 ) -> FreestileLayer:
     """Create a layer with per-layer zoom control.
 
@@ -115,6 +129,9 @@ def freestile_layer(
         ``FreestileLayer``. None keeps the regular polygon path.
     keep_short_lines : bool, optional
         Keep every line feature at every zoom; see ``FreestileLayer``.
+    line_simplify : float, optional
+        Per-zoom line simplification tolerance in tile pixels; see
+        ``FreestileLayer``. None keeps the default line path.
 
     Returns
     -------
@@ -123,7 +140,8 @@ def freestile_layer(
     return FreestileLayer(input=input, min_zoom=min_zoom, max_zoom=max_zoom,
                           crs=crs, geometry_column=geometry_column,
                           polygon_simplify=polygon_simplify,
-                          keep_short_lines=keep_short_lines)
+                          keep_short_lines=keep_short_lines,
+                          line_simplify=line_simplify)
 
 
 def _is_arrow(obj) -> bool:
@@ -170,6 +188,8 @@ def freestile(
     cluster_min_points: int = 2,
     gzip_level: int | None = None,
     buffer: float | None = None,
+    deduplicate: bool = False,
+    sort_values: bool = False,
 ) -> Path:
     """Create a PMTiles archive from geospatial data.
 
@@ -232,6 +252,19 @@ def freestile(
         fewer features in neighbouring tiles. ``buffer=5`` (tippecanoe's
         default) makes HEC-RAS mesh archives about 10% smaller. Keep it at
         least half the widest rendered line width.
+    deduplicate : bool
+        Store byte-identical tiles once, with run-length directory entries,
+        as ``pmtiles convert`` (tippecanoe's route to PMTiles) does. Every
+        tile is still addressed and decodes the same. Sparse tilesets whose
+        polygons cover whole tiles at high zoom shrink the most (Bald Eagle
+        engineering layers: -26%). Default False keeps archives byte-identical
+        to earlier releases.
+    sort_values : bool
+        MVT only: write each layer's keys and values ahead of its features,
+        with the value table sorted by encoded bytes, as tippecanoe does.
+        Decoded features, properties and geometry are unchanged; tiles with
+        many property values compress better (about 1.6% on HEC-RAS pipe
+        networks). Default False.
 
     Arrow input: ``input`` (or a dict value / ``FreestileLayer.input``) may
     be any object with ``__arrow_c_stream__``. It is read through the Arrow
@@ -292,6 +325,10 @@ def freestile(
             raise ValueError("gzip_level is not supported with categorical clustering")
         gzip_level = _check_gzip_level(gzip_level)
     buffer = _check_buffer(buffer)
+    deduplicate = _check_flag(deduplicate, "deduplicate")
+    sort_values = _check_flag(sort_values, "sort_values")
+    if categorical and (deduplicate or sort_values):
+        raise ValueError("deduplicate and sort_values are not supported with categorical clustering")
 
     # Determine default layer_name
     single = isinstance(input, (gpd.GeoDataFrame, FreestileLayer)) or _is_arrow(input)
@@ -341,6 +378,7 @@ def freestile(
             cluster_maxzoom=cluster_maxzoom, coalesce=coalesce,
             simplification=simplification, generate_ids=generate_ids, quiet=quiet,
             gzip_level=gzip_level, buffer=buffer,
+            deduplicate=deduplicate, sort_values=sort_values,
         )
         if not quiet:
             print(f"Created {output} ({_format_size(output.stat().st_size)})")
@@ -349,7 +387,7 @@ def freestile(
     # Preprocess each layer
     rust_layers = []
     for name, value in layers_dict.items():
-        polygon_simplify = None
+        polygon_simplify = line_simplify = None
         keep_short_lines = False
         if isinstance(value, FreestileLayer):
             gdf = value.input
@@ -361,6 +399,9 @@ def freestile(
             keep_short_lines = _check_keep_short_lines(value.keep_short_lines)
             if keep_short_lines and categorical:
                 raise ValueError("keep_short_lines is not supported with categorical clustering")
+            line_simplify = _check_line_simplify(value.line_simplify)
+            if line_simplify is not None and categorical:
+                raise ValueError("line_simplify is not supported with categorical clustering")
         else:
             gdf = value
             layer_min = min_zoom
@@ -368,6 +409,7 @@ def freestile(
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
         layer_data["polygon_simplify"] = polygon_simplify
         layer_data["keep_short_lines"] = keep_short_lines
+        layer_data["line_simplify"] = line_simplify
         rust_layers.append(layer_data)
 
     # Call Rust
@@ -395,6 +437,8 @@ def freestile(
             do_coalesce=coalesce,
             gzip_level=gzip_level,
             buffer=buffer,
+            deduplicate=deduplicate,
+            sort_values=sort_values,
         )
 
     if not quiet:
@@ -428,6 +472,8 @@ def freestile_layers(
     quiet: bool = False,
     gzip_level: int | None = None,
     buffer: float | None = None,
+    deduplicate: bool = False,
+    sort_values: bool = False,
 ) -> Path:
     """Create a multi-layer PMTiles archive holding one layer in memory at a time.
 
@@ -448,8 +494,9 @@ def freestile_layers(
     output : str or Path
         Output path for the .pmtiles file.
 
-    The remaining options, including ``gzip_level``, have the same meaning
-    as in ``freestile()``.
+    The remaining options, including ``gzip_level``, ``buffer``,
+    ``deduplicate`` and ``sort_values``, have the same meaning as in
+    ``freestile()``.
     Categorical clustering is not available here.
 
     Returns
@@ -462,6 +509,8 @@ def freestile_layers(
     if gzip_level is not None:
         gzip_level = _check_gzip_level(gzip_level)
     buffer = _check_buffer(buffer)
+    deduplicate = _check_flag(deduplicate, "deduplicate")
+    sort_values = _check_flag(sort_values, "sort_values")
     output = Path(output).resolve()
     if output.exists() and not overwrite:
         raise FileExistsError(
@@ -474,7 +523,7 @@ def freestile_layers(
         cluster_distance=cluster_distance, cluster_maxzoom=cluster_maxzoom,
         coalesce=coalesce, simplification=simplification,
         generate_ids=generate_ids, quiet=quiet, gzip_level=gzip_level,
-        buffer=buffer,
+        buffer=buffer, deduplicate=deduplicate, sort_values=sort_values,
     )
     if not quiet:
         print(f"Created {output} ({_format_size(output.stat().st_size)})")
@@ -487,6 +536,20 @@ def _check_polygon_simplify(tolerance):
     if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float, np.integer, np.floating)) \
             or not 0 < float(tolerance) <= 64:
         raise ValueError("polygon_simplify must be a number of tile pixels above 0 and at most 64")
+    return float(tolerance)
+
+
+def _check_flag(value, name: str) -> bool:
+    if not isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be True or False")
+    return bool(value)
+
+
+def _check_line_simplify(tolerance):
+    if tolerance is None:
+        return None
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float, np.integer, np.floating))             or not 0 < float(tolerance) <= 64:
+        raise ValueError("line_simplify must be a number of tile pixels above 0 and at most 64")
     return float(tolerance)
 
 
@@ -506,7 +569,8 @@ def _check_gzip_level(gzip_level) -> int:
 def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
                   base_zoom, drop_rate, cluster_distance, cluster_maxzoom,
                   coalesce, simplification, generate_ids, quiet,
-                  gzip_level=None, buffer=None) -> None:
+                  gzip_level=None, buffer=None, deduplicate=False,
+                  sort_values=False) -> None:
     tiler = _LayeredTiler(
         tile_format, min_zoom, max_zoom,
         base_zoom if base_zoom is not None else -1,
@@ -517,6 +581,8 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
         coalesce,
         gzip_level,
         buffer,
+        deduplicate,
+        sort_values,
     )
     seen = set()
     for name, source in pairs:
@@ -529,7 +595,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
             source = source()
         if isinstance(source, (str, os.PathLike)):
             source = gpd.read_parquet(source)
-        crs = geometry_column = polygon_simplify = None
+        crs = geometry_column = polygon_simplify = line_simplify = None
         keep_short_lines = False
         if isinstance(source, FreestileLayer):
             gdf = source.input
@@ -538,6 +604,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
             crs, geometry_column = source.crs, source.geometry_column
             polygon_simplify = _check_polygon_simplify(source.polygon_simplify)
             keep_short_lines = _check_keep_short_lines(source.keep_short_lines)
+            line_simplify = _check_line_simplify(source.line_simplify)
         else:
             gdf, layer_min, layer_max = source, min_zoom, max_zoom
         source = None
@@ -547,6 +614,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
                 geometry_column=geometry_column, crs=_crs_text(crs),
                 polygon_simplify=polygon_simplify,
                 keep_short_lines=keep_short_lines,
+                line_simplify=line_simplify,
             )
             if not quiet and report.get("reprojection"):
                 print(f"  Reprojected layer '{name}' to WGS84 in Rust")
@@ -557,6 +625,7 @@ def _tile_layered(pairs, output: Path, *, tile_format, min_zoom, max_zoom,
         layer_data = _preprocess_layer(gdf, name, layer_min, layer_max, quiet)
         layer_data["polygon_simplify"] = polygon_simplify
         layer_data["keep_short_lines"] = keep_short_lines
+        layer_data["line_simplify"] = line_simplify
         gdf = None
         tiler.add_layer(layer_data)
         layer_data = None

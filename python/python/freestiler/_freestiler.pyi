@@ -16,6 +16,8 @@ def _freestile(
     do_coalesce: bool,
     gzip_level: int | None = None,
     buffer: float | None = None,
+    deduplicate: bool = False,
+    sort_values: bool = False,
 ) -> str: ...
 
 def _freestile_file(
@@ -85,6 +87,8 @@ class _LayeredTiler:
         do_coalesce: bool,
         gzip_level: int | None = None,
         buffer: float | None = None,
+        deduplicate: bool = False,
+        sort_values: bool = False,
     ) -> None: ...
     def add_layer(self, layer: dict) -> int: ...
     def add_arrow_layer(

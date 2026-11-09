@@ -69,6 +69,7 @@ fn mesh(name: &str, n: usize, value_offset: f64, min_zoom: u8, max_zoom: u8) -> 
         max_zoom,
         polygon_simplify: None,
         keep_short_lines: false,
+        line_simplify: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn lines() -> LayerData {
         max_zoom: 14,
         polygon_simplify: None,
         keep_short_lines: false,
+        line_simplify: None,
     }
 }
 
@@ -122,6 +124,7 @@ fn points() -> LayerData {
         max_zoom: 14,
         polygon_simplify: None,
         keep_short_lines: false,
+        line_simplify: None,
     }
 }
 
@@ -149,6 +152,8 @@ fn config(format: TileFormat, variant: u8) -> TileConfig {
         coalesce: variant == 3,
         gzip_level: (variant == 4).then_some(6),
         buffer: None,
+        deduplicate: false,
+        sort_values: false,
     }
 }
 
@@ -195,6 +200,7 @@ fn layered_without_tiles_fails_like_in_memory() {
         max_zoom: 4,
         polygon_simplify: None,
         keep_short_lines: false,
+        line_simplify: None,
     };
     let mut tiler = LayeredTiler::new(config(TileFormat::Mvt, 0)).unwrap();
     tiler.add_layer(empty, &SilentReporter).unwrap();

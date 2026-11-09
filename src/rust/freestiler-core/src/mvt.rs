@@ -80,6 +80,77 @@ pub fn encode_tile_multilayer(
     coord: &TileCoord,
     layer_data: &[(&str, &[String], &[Feature])],
 ) -> Vec<u8> {
+    encode_tile_layers(coord, layer_data, false)
+}
+
+/// Encode features from multiple layers into a single MVT tile. With
+/// `sort_values`, each layer is written as name, keys, values (sorted by their
+/// encoded bytes, as tippecanoe sorts them), extent, version and then its
+/// features; decoders read the same features, properties and geometry.
+pub fn encode_tile_layers(
+    coord: &TileCoord,
+    layer_data: &[(&str, &[String], &[Feature])],
+    sort_values: bool,
+) -> Vec<u8> {
+    let layers = build_layers(coord, layer_data);
+    if layers.is_empty() {
+        return Vec::new();
+    }
+    if sort_values {
+        let mut buf = Vec::new();
+        for layer in layers {
+            let body = encode_layer_sorted(layer);
+            prost::encoding::encode_key(3, prost::encoding::WireType::LengthDelimited, &mut buf);
+            prost::encoding::encode_varint(body.len() as u64, &mut buf);
+            buf.extend_from_slice(&body);
+        }
+        return buf;
+    }
+    let tile = Tile { layers };
+    let mut buf = Vec::with_capacity(tile.encoded_len());
+    tile.encode(&mut buf).expect("MVT encoding failed");
+    buf
+}
+
+/// One layer's protobuf body with keys and sorted values ahead of features.
+fn encode_layer_sorted(mut layer: Layer) -> Vec<u8> {
+    use prost::encoding::{message, string, uint32};
+
+    let encoded: Vec<Vec<u8>> = layer.values.iter().map(|v| v.encode_to_vec()).collect();
+    let mut order: Vec<usize> = (0..encoded.len()).collect();
+    order.sort_by(|&a, &b| encoded[a].cmp(&encoded[b]).then(a.cmp(&b)));
+    let mut remap = vec![0u32; order.len()];
+    for (new, &old) in order.iter().enumerate() {
+        remap[old] = new as u32;
+    }
+    for feature in &mut layer.features {
+        for value in feature.tags.iter_mut().skip(1).step_by(2) {
+            *value = remap[*value as usize];
+        }
+    }
+
+    let mut buf = Vec::new();
+    string::encode(1, &layer.name, &mut buf);
+    for key in &layer.keys {
+        string::encode(3, key, &mut buf);
+    }
+    for &i in &order {
+        prost::encoding::encode_key(4, prost::encoding::WireType::LengthDelimited, &mut buf);
+        prost::encoding::encode_varint(encoded[i].len() as u64, &mut buf);
+        buf.extend_from_slice(&encoded[i]);
+    }
+    if let Some(extent) = layer.extent {
+        uint32::encode(5, &extent, &mut buf);
+    }
+    uint32::encode(15, &layer.version, &mut buf);
+    for feature in &layer.features {
+        message::encode(2, feature, &mut buf);
+    }
+    buf
+}
+
+/// Build the MVT layers of one tile, in input order, skipping empty layers.
+fn build_layers(coord: &TileCoord, layer_data: &[(&str, &[String], &[Feature])]) -> Vec<Layer> {
     let bounds = tile_bounds(coord);
     let west = bounds.min().x;
     let south = bounds.min().y;
@@ -165,14 +236,7 @@ pub fn encode_tile_multilayer(
         }
     }
 
-    if layers.is_empty() {
-        return Vec::new();
-    }
-
-    let tile = Tile { layers };
-    let mut buf = Vec::with_capacity(tile.encoded_len());
-    tile.encode(&mut buf).expect("MVT encoding failed");
-    buf
+    layers
 }
 
 /// Encode features into an MVT tile (single layer — convenience wrapper)

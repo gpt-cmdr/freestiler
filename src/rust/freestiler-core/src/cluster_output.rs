@@ -775,6 +775,7 @@ mod tests {
             prop_types: s.types, min_zoom: 0, max_zoom: 3,
             polygon_simplify: None,
             keep_short_lines: false,
+            line_simplify: None,
         };
         let dir = Scratch::new().unwrap();
         for generate_ids in [true, false] {

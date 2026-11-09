@@ -1,5 +1,8 @@
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{copy, BufWriter, Seek, SeekFrom, Write};
+use std::hash::Hasher;
+use std::io::{copy, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,6 +62,11 @@ pub struct TileSpool {
     file: BufWriter<File>,
     offset: u64,
     entries: Vec<Entry>,
+    /// With deduplication on: (length, hash) of each distinct tile payload ->
+    /// spool offsets holding a payload with that key. A hit is confirmed byte
+    /// for byte against the spool, so a hash collision never aliases tiles.
+    dedup: Option<HashMap<(u32, u64), Vec<u64>>>,
+    contents: u64,
 }
 
 impl TileSpool {
@@ -76,7 +84,51 @@ impl TileSpool {
             file: BufWriter::new(file),
             offset: 0,
             entries: Vec::new(),
+            dedup: None,
+            contents: 0,
         })
+    }
+
+    /// Store identical tile payloads once, as `pmtiles convert` does: a
+    /// repeated payload is not written again and its directory entry points at
+    /// the first copy, and consecutive tile IDs sharing one payload become one
+    /// run-length entry when the archive is assembled. Every tile is still
+    /// addressed and decodes to the same bytes; only storage changes. Off by
+    /// default, so default archives stay byte-identical.
+    pub fn set_deduplicate(&mut self, on: bool) {
+        self.dedup = on.then(HashMap::new);
+    }
+
+    /// Number of distinct payloads written to the spool.
+    pub fn contents(&self) -> u64 {
+        self.contents
+    }
+
+    /// Offset of an earlier payload byte-identical to `bytes`, if any.
+    fn find_duplicate(&mut self, key: (u32, u64), bytes: &[u8]) -> Result<Option<u64>, String> {
+        let candidates = match self.dedup.as_ref().and_then(|m| m.get(&key)) {
+            Some(c) if !c.is_empty() => c.clone(),
+            _ => return Ok(None),
+        };
+        self.file
+            .flush()
+            .map_err(|e| format!("Cannot flush tile spool: {}", e))?;
+        let mut stored = vec![0u8; bytes.len()];
+        let mut found = None;
+        let file = self.file.get_mut();
+        for offset in candidates {
+            file.seek(SeekFrom::Start(offset))
+                .map_err(|e| format!("Cannot seek tile spool: {}", e))?;
+            file.read_exact(&mut stored)
+                .map_err(|e| format!("Cannot read tile spool: {}", e))?;
+            if stored == bytes {
+                found = Some(offset);
+                break;
+            }
+        }
+        file.seek(SeekFrom::End(0))
+            .map_err(|e| format!("Cannot seek tile spool: {}", e))?;
+        Ok(found)
     }
 
     /// Compress a raw tile and append it to the spool.
@@ -91,17 +143,41 @@ impl TileSpool {
         coord: TileCoord,
         compressed: &[u8],
     ) -> Result<(), String> {
+        let tile_id = tile_id(coord.z, coord.x as u64, coord.y as u64);
+        let length = compressed.len() as u32;
+        let key = if self.dedup.is_some() {
+            let mut hasher = DefaultHasher::new();
+            hasher.write(compressed);
+            let key = (length, hasher.finish());
+            if let Some(offset) = self.find_duplicate(key, compressed)? {
+                self.entries.push(Entry {
+                    tile_id,
+                    offset,
+                    length,
+                    run_length: 1,
+                });
+                return Ok(());
+            }
+            Some(key)
+        } else {
+            None
+        };
+
         self.file
             .write_all(compressed)
             .map_err(|e| format!("Cannot write tile spool: {}", e))?;
 
+        if let (Some(key), Some(map)) = (key, self.dedup.as_mut()) {
+            map.entry(key).or_default().push(self.offset);
+        }
         self.entries.push(Entry {
-            tile_id: tile_id(coord.z, coord.x as u64, coord.y as u64),
+            tile_id,
             offset: self.offset,
-            length: compressed.len() as u32,
+            length,
             run_length: 1,
         });
         self.offset += compressed.len() as u64;
+        self.contents += 1;
         Ok(())
     }
 
@@ -137,8 +213,7 @@ pub struct RawSpool {
 
 impl RawSpool {
     pub fn new() -> Result<Self, String> {
-        let (file, path) =
-            create_exclusive_temp(&std::env::temp_dir(), "freestiler_layers", true)?;
+        let (file, path) = create_exclusive_temp(&std::env::temp_dir(), "freestiler_layers", true)?;
         let reader = file
             .try_clone()
             .map_err(|e| format!("Cannot reopen layer spool: {}", e))?;
@@ -165,7 +240,11 @@ impl RawSpool {
     /// Append the bytes of `extent` to `out`.
     pub fn read_into(&mut self, extent: (u64, u32), out: &mut Vec<u8>) -> Result<(), String> {
         use std::io::Read;
-        if extent.0.checked_add(u64::from(extent.1)).map_or(true, |end| end > self.offset) {
+        if extent
+            .0
+            .checked_add(u64::from(extent.1))
+            .map_or(true, |end| end > self.offset)
+        {
             return Err("Layer spool extent out of range".to_string());
         }
         self.writer
@@ -215,16 +294,30 @@ pub fn write_pmtiles_from_spool(
     max_zoom: u8,
     bounds: (f64, f64, f64, f64), // (west, south, east, north)
 ) -> Result<(), String> {
-    write_pmtiles_from_spool_metadata(output_path, spool, format, layers, min_zoom, max_zoom, bounds, None)
+    write_pmtiles_from_spool_metadata(
+        output_path,
+        spool,
+        format,
+        layers,
+        min_zoom,
+        max_zoom,
+        bounds,
+        None,
+    )
 }
 
 /// Extra build provenance lives in a namespaced key; callers cannot override
 /// vector_layers or the archive header through it.
 pub fn write_pmtiles_from_spool_metadata(
-    output_path: &str, spool: &mut TileSpool, format: TileFormat,
-    layers: &[LayerMeta], min_zoom: u8, max_zoom: u8,
-    bounds: (f64,f64,f64,f64), provenance: Option<&Value>,
-) -> Result<(),String> {
+    output_path: &str,
+    spool: &mut TileSpool,
+    format: TileFormat,
+    layers: &[LayerMeta],
+    min_zoom: u8,
+    max_zoom: u8,
+    bounds: (f64, f64, f64, f64),
+    provenance: Option<&Value>,
+) -> Result<(), String> {
     spool.flush()?;
     let mut entries = std::mem::take(&mut spool.entries);
     if entries.is_empty() {
@@ -232,13 +325,21 @@ pub fn write_pmtiles_from_spool_metadata(
     }
 
     entries.sort_by_key(|entry| entry.tile_id);
+    let addressed_tiles = entries.len() as u64;
+    let deduplicated = spool.dedup.is_some();
+    let tile_contents = if deduplicated {
+        spool.contents
+    } else {
+        addressed_tiles
+    };
+    if deduplicated {
+        entries = merge_runs(entries);
+    }
 
     // PMTiles v3 `clustered` requires the tile DATA to be laid out in
-    // ascending tile_id order, not just the directory entries.
-    let clustered = entries.first().is_some_and(|e| e.offset == 0)
-        && entries
-            .windows(2)
-            .all(|w| w[1].offset == w[0].offset + u64::from(w[0].length));
+    // ascending tile_id order, not just the directory entries. A deduplicated
+    // entry may point back at data already laid out.
+    let clustered = is_clustered(&entries);
 
     let out_path = Path::new(output_path);
     let out_dir = match out_path.parent() {
@@ -299,9 +400,9 @@ pub fn write_pmtiles_from_spool_metadata(
     header.leaf_directories_length = leaf_directories_length;
     header.tile_data_offset = tile_data_offset;
     header.tile_data_length = tile_data_length;
-    header.num_addressed_tiles = entries.len() as u64;
+    header.num_addressed_tiles = addressed_tiles;
     header.num_tile_entries = entries.len() as u64;
-    header.num_tile_content = entries.len() as u64;
+    header.num_tile_content = tile_contents;
     header.clustered = clustered;
     header.internal_compression = PmCompression::GZip;
     header.tile_compression = PmCompression::GZip;
@@ -358,11 +459,48 @@ pub fn write_pmtiles_from_spool_metadata(
     Ok(())
 }
 
+/// Merge consecutive tile IDs that share one payload into run-length entries.
+/// `entries` is sorted by tile ID, each with run length 1.
+fn merge_runs(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut merged: Vec<Entry> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if let Some(last) = merged.last_mut() {
+            if last.offset == entry.offset
+                && last.length == entry.length
+                && last.tile_id + u64::from(last.run_length) == entry.tile_id
+            {
+                last.run_length += 1;
+                continue;
+            }
+        }
+        merged.push(entry);
+    }
+    merged
+}
+
+/// Whether tile data is laid out in tile ID order: each entry either starts
+/// where the data laid out so far ends, or points back inside it (a
+/// deduplicated tile).
+fn is_clustered(entries: &[Entry]) -> bool {
+    let mut end = 0u64;
+    for entry in entries {
+        if entry.offset == end {
+            end += u64::from(entry.length);
+        } else if entry.offset + u64::from(entry.length) > end {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 fn build_metadata_bytes(layers: &[LayerMeta]) -> Result<Vec<u8>, String> {
     build_metadata_bytes_with_provenance(layers, None)
 }
-fn build_metadata_bytes_with_provenance(layers: &[LayerMeta], provenance: Option<&Value>) -> Result<Vec<u8>, String> {
+fn build_metadata_bytes_with_provenance(
+    layers: &[LayerMeta],
+    provenance: Option<&Value>,
+) -> Result<Vec<u8>, String> {
     let vector_layers: Vec<Value> = layers
         .iter()
         .map(|l| {
@@ -370,7 +508,9 @@ fn build_metadata_bytes_with_provenance(layers: &[LayerMeta], provenance: Option
             for (i, name) in l.property_names.iter().enumerate() {
                 // TileJSON has no union type. In particular upstream cluster
                 // abbreviations are integers below 1000 and strings above it.
-                if l.property_types.get(i).map(String::as_str) == Some("mixed") { continue; }
+                if l.property_types.get(i).map(String::as_str) == Some("mixed") {
+                    continue;
+                }
                 let field_type = match l.property_types.get(i).map(String::as_str) {
                     Some("integer" | "integer_double" | "numeric" | "double" | "float") => "Number",
                     Some("logical" | "boolean" | "bool") => "Boolean",
@@ -395,7 +535,9 @@ fn build_metadata_bytes_with_provenance(layers: &[LayerMeta], provenance: Option
     let mut metadata = json!({
         "vector_layers": vector_layers
     });
-    if let Some(value) = provenance { metadata["freestiler"] = value.clone(); }
+    if let Some(value) = provenance {
+        metadata["freestiler"] = value.clone();
+    }
 
     let metadata_json =
         serde_json::to_vec(&metadata).map_err(|e| format!("Metadata JSON error: {}", e))?;
@@ -704,6 +846,81 @@ mod tests {
 
         fs::remove_file(&out).unwrap();
         fs::remove_dir(&dir).unwrap();
+    }
+
+    fn entry(tile_id: u64, offset: u64, length: u32) -> Entry {
+        Entry {
+            tile_id,
+            offset,
+            length,
+            run_length: 1,
+        }
+    }
+
+    #[test]
+    fn runs_merge_only_consecutive_ids_with_one_payload() {
+        let merged = merge_runs(vec![
+            entry(1, 0, 10),
+            entry(2, 0, 10),
+            entry(3, 0, 10),
+            entry(5, 0, 10),
+            entry(6, 10, 4),
+            entry(7, 0, 10),
+        ]);
+        let runs: Vec<(u64, u64, u32)> = merged
+            .iter()
+            .map(|e| (e.tile_id, e.offset, e.run_length))
+            .collect();
+        assert_eq!(runs, vec![(1, 0, 3), (5, 0, 1), (6, 10, 1), (7, 0, 1)]);
+    }
+
+    #[test]
+    fn back_references_stay_clustered() {
+        assert!(is_clustered(&[
+            entry(1, 0, 10),
+            entry(2, 10, 5),
+            entry(3, 0, 10)
+        ]));
+        assert!(!is_clustered(&[entry(1, 10, 5), entry(2, 0, 10)]));
+        assert!(!is_clustered(&[entry(1, 0, 10), entry(2, 20, 5)]));
+    }
+
+    #[test]
+    fn deduplicating_spool_writes_each_payload_once() {
+        let dir = std::env::temp_dir();
+        let mut spool = TileSpool::new_in(&dir).unwrap();
+        spool.set_deduplicate(true);
+        let same = gzip_compress(b"same tile").unwrap();
+        let other = gzip_compress(b"another tile").unwrap();
+        spool.write_compressed_tile(coord(14, 0, 0), &same).unwrap();
+        spool
+            .write_compressed_tile(coord(14, 1, 0), &other)
+            .unwrap();
+        spool.write_compressed_tile(coord(14, 0, 1), &same).unwrap();
+        spool.write_compressed_tile(coord(14, 1, 1), &same).unwrap();
+        assert_eq!(spool.len(), 4);
+        assert_eq!(spool.contents(), 2);
+        let out = temp_output("dedup");
+        write_pmtiles_from_spool(
+            out.to_str().unwrap(),
+            &mut spool,
+            TileFormat::Mvt,
+            &test_layers(),
+            14,
+            14,
+            (0.0, 0.0, 1.0, 1.0),
+        )
+        .unwrap();
+        let header = read_header(&out);
+        assert_eq!(header.num_addressed_tiles, 4);
+        assert_eq!(header.num_tile_content, 2);
+        assert!(header.clustered);
+        assert_eq!(header.tile_data_length, (same.len() + other.len()) as u64);
+        let mut archive = pmtiles2::PMTiles::from_reader(File::open(&out).unwrap()).unwrap();
+        for (x, y, want) in [(0, 0, &same), (1, 0, &other), (0, 1, &same), (1, 1, &same)] {
+            assert_eq!(&archive.get_tile(x, y, 14).unwrap().unwrap(), want);
+        }
+        let _ = fs::remove_file(out);
     }
 
     #[test]
