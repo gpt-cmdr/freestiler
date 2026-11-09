@@ -127,32 +127,32 @@ jobs:
             manylinux: "auto"
             duckdb_explicit_platform: ""
             interpreter: "python"
-          - os: macos-14
+          - os: macos-15
             python-version: "3.9"
             manylinux: "auto"
             duckdb_explicit_platform: ""
             interpreter: "python"
-          - os: macos-14
+          - os: macos-15
             python-version: "3.10"
             manylinux: "auto"
             duckdb_explicit_platform: ""
             interpreter: "python"
-          - os: macos-14
+          - os: macos-15
             python-version: "3.11"
             manylinux: "auto"
             duckdb_explicit_platform: ""
             interpreter: "python"
-          - os: macos-14
+          - os: macos-15
             python-version: "3.12"
             manylinux: "auto"
             duckdb_explicit_platform: ""
             interpreter: "python"
-          - os: macos-14
+          - os: macos-15
             python-version: "3.13"
             manylinux: "auto"
             duckdb_explicit_platform: ""
             interpreter: "python"
-          - os: macos-14
+          - os: macos-15
             python-version: "3.14"
             manylinux: "auto"
             duckdb_explicit_platform: ""
