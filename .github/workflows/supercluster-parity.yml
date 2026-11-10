@@ -40,18 +40,26 @@ on:
         type: boolean
         default: false
 
+# Linux and Windows run on CLB's self-hosted Slurm runners; pull requests from
+# forks fall back to GitHub-hosted matrix.os. macOS is GitHub-hosted (opt-in).
 permissions:
   contents: read
 
 jobs:
   kernel:
     name: Kernel (${{ matrix.os }}, Rust ${{ matrix.toolchain }})
-    runs-on: ${{ matrix.os }}
+    # Fork pull requests -> GitHub-hosted matrix.os; otherwise the self-hosted labels.
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('["{0}"]', matrix.os) || matrix.self_hosted || format('["{0}"]', matrix.os)) }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.include_macos && '["ubuntu-latest", "windows-2022", "macos-15"]' || '["ubuntu-latest", "windows-2022"]') }}
         toolchain: ["1.77.2", stable]
+        include:
+          - os: ubuntu-latest
+            self_hosted: '["self-hosted", "Linux", "X64", "clb-ci-linux"]'
+          - os: windows-2022
+            self_hosted: '["self-hosted", "Windows", "X64", "clb-ci-windows"]'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,12 +67,19 @@ jobs:
           python-version: "3.x"
       - name: Check distribution attribution copies
         run: python tools/check_upstream_licenses.py
+      # The self-hosted Linux image has no Rust; this installs rustup under HOME.
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install pinned toolchain without changing default
-        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --no-self-update
+        shell: bash
+        run: |
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal --no-self-update
+      # `rustup run` rather than `cargo +toolchain`: the self-hosted Windows
+      # image can lack the cargo proxy that understands `+toolchain`.
       - name: Run the actual kernel source and strict upstream fixtures
-        run: cargo +${{ matrix.toolchain }} test --manifest-path tools/supercluster-compat/Cargo.toml --locked
+        run: rustup run ${{ matrix.toolchain }} cargo test --manifest-path tools/supercluster-compat/Cargo.toml --locked
       - name: Verify optimized arithmetic against the same fixtures
-        run: cargo +${{ matrix.toolchain }} test --manifest-path tools/supercluster-compat/Cargo.toml --locked --release
+        run: rustup run ${{ matrix.toolchain }} cargo test --manifest-path tools/supercluster-compat/Cargo.toml --locked --release
       # Kernel-only job: not a claim that the whole core/dependency graph has
       # passed MSRV or that other bindings have been exercised. Keep strict
       # assertions across platforms; investigate libm projection on failure.
